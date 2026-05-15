@@ -1,62 +1,55 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
-// ─── CRYPTO ENGINE ─────────────────────────────────────────────────────
+// ─── CRYPTO ────────────────────────────────────────────────────────────────
 const PBKDF2_ITERATIONS = 310000;
 const SALT_LEN = 32;
-const IV_LEN = 12;
+const IV_LEN   = 12;
 
 async function deriveKey(password, salt) {
   const enc = new TextEncoder();
-  const km = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveKey"]);
+  const km  = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveKey"]);
   return crypto.subtle.deriveKey(
     { name:"PBKDF2", salt, iterations:PBKDF2_ITERATIONS, hash:"SHA-256" },
     km, { name:"AES-GCM", length:256 }, false, ["encrypt","decrypt"]
   );
 }
-
 async function encryptVault(data, password) {
   const salt = crypto.getRandomValues(new Uint8Array(SALT_LEN));
   const iv   = crypto.getRandomValues(new Uint8Array(IV_LEN));
   const key  = await deriveKey(password, salt);
-  const enc  = new TextEncoder();
-  const ct   = await crypto.subtle.encrypt({ name:"AES-GCM", iv }, key, enc.encode(JSON.stringify(data)));
+  const ct   = await crypto.subtle.encrypt({ name:"AES-GCM", iv }, key, new TextEncoder().encode(JSON.stringify(data)));
   const out  = new Uint8Array(SALT_LEN + IV_LEN + ct.byteLength);
   out.set(salt,0); out.set(iv,SALT_LEN); out.set(new Uint8Array(ct), SALT_LEN+IV_LEN);
   return btoa(String.fromCharCode(...out));
 }
-
 async function decryptVault(b64, password) {
-  const raw = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-  const salt = raw.slice(0, SALT_LEN);
-  const iv   = raw.slice(SALT_LEN, SALT_LEN+IV_LEN);
-  const ct   = raw.slice(SALT_LEN+IV_LEN);
-  const key  = await deriveKey(password, salt);
-  const dec  = new TextDecoder();
-  const plain = await crypto.subtle.decrypt({ name:"AES-GCM", iv }, key, ct);
-  return JSON.parse(dec.decode(plain));
+  const raw   = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const key   = await deriveKey(password, raw.slice(0,SALT_LEN));
+  const plain = await crypto.subtle.decrypt({ name:"AES-GCM", iv:raw.slice(SALT_LEN,SALT_LEN+IV_LEN) }, key, raw.slice(SALT_LEN+IV_LEN));
+  return JSON.parse(new TextDecoder().decode(plain));
 }
 
-// ─── STORAGE ───────────────────────────────────────────────────────────
+// ─── STORAGE ───────────────────────────────────────────────────────────────
 const STORAGE_KEY    = "vlt_enc";
 const BACKUP_LOG_KEY = "vlt_backup_log";
-function saveEncrypted(b64) { localStorage.setItem(STORAGE_KEY, b64); }
-function loadEncrypted()    { return localStorage.getItem(STORAGE_KEY); }
-function loadBackupLog()    { try { return JSON.parse(localStorage.getItem(BACKUP_LOG_KEY)||"[]"); } catch { return []; } }
-function saveBackupLog(log) { localStorage.setItem(BACKUP_LOG_KEY, JSON.stringify(log)); }
+const saveEncrypted  = b64  => localStorage.setItem(STORAGE_KEY, b64);
+const loadEncrypted  = ()   => localStorage.getItem(STORAGE_KEY);
+const loadBackupLog  = ()   => { try { return JSON.parse(localStorage.getItem(BACKUP_LOG_KEY)||"[]"); } catch { return []; } };
+const saveBackupLog  = log  => localStorage.setItem(BACKUP_LOG_KEY, JSON.stringify(log));
 function addBackupEntry(count) {
   const log = loadBackupLog();
   log.unshift({ date: new Date().toISOString(), entries: count });
   saveBackupLog(log.slice(0,10));
 }
 
-// ─── ICONS ─────────────────────────────────────────────────────────────
-const Icon = ({ d, size=20, stroke="currentColor", fill="none", strokeWidth=1.8 }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill={fill} stroke={stroke} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+// ─── ICONS ─────────────────────────────────────────────────────────────────
+const Icon = ({ d, size=20, stroke="currentColor", fill="none", sw=1.8 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill={fill} stroke={stroke}
+       strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0}}>
     {Array.isArray(d) ? d.map((p,i)=><path key={i} d={p}/>) : <path d={d}/>}
   </svg>
 );
-
-const icons = {
+const IC = {
   lock:     "M19 11H5a2 2 0 00-2 2v7a2 2 0 002 2h14a2 2 0 002-2v-7a2 2 0 00-2-2zM7 11V7a5 5 0 0110 0v4",
   eye:      ["M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z","M12 9a3 3 0 100 6 3 3 0 000-6z"],
   eyeOff:   ["M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24M1 1l22 22"],
@@ -81,622 +74,748 @@ const icons = {
   database: ["M12 2C6.48 2 2 4.24 2 7s4.48 5 10 5 10-2.24 10-5-4.48-5-10-5z","M2 7v5c0 2.76 4.48 5 10 5s10-2.24 10-5V7","M2 12v5c0 2.76 4.48 5 10 5s10-2.24 10-5v-5"],
   alertTri: ["M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z","M12 9v4","M12 17h.01"],
   backup:   ["M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4","M7 10l5 5 5-5","M12 15V3"],
+  menu:     "M3 12h18M3 6h18M3 18h18",
+  chevronL: "M15 18l-6-6 6-6",
+  user:     ["M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2","M12 3a4 4 0 100 8 4 4 0 000-8z"],
+  phone:    ["M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.8 19.79 19.79 0 01.15 1.18 2 2 0 012.11 0h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L6.91 7.91a16 16 0 006.18 6.18l1.27-1.35a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"],
+  hash:     ["M4 9h16M4 15h16M10 3L8 21M16 3l-2 18"],
 };
 
-// ─── CATEGORIES ────────────────────────────────────────────────────────
+// ─── CATEGORIES & FIELDS ───────────────────────────────────────────────────
 const CATEGORIES = [
-  { id:"password", label:"Contraseñas",  icon:"key",   color:"#60A5FA" },
-  { id:"card",     label:"Tarjetas",      icon:"card",  color:"#F472B6" },
-  { id:"wifi",     label:"Redes WiFi",    icon:"wifi",  color:"#34D399" },
-  { id:"note",     label:"Notas seguras", icon:"note",  color:"#FBBF24" },
-  { id:"identity", label:"Identidades",   icon:"globe", color:"#A78BFA" },
+  { id:"password", label:"Contraseña",  icon:"key",   color:"#60A5FA" },
+  { id:"card",     label:"Tarjeta",     icon:"card",  color:"#F472B6" },
+  { id:"wifi",     label:"WiFi",        icon:"wifi",  color:"#34D399" },
+  { id:"note",     label:"Nota",        icon:"note",  color:"#FBBF24" },
+  { id:"identity", label:"Identidad",   icon:"user",  color:"#A78BFA" },
 ];
 
-const FIELD_TEMPLATES = {
+const FIELDS = {
   password: [
-    { key:"url",      label:"URL / Sitio web",    type:"text",     icon:"globe" },
-    { key:"username", label:"Usuario / Email",     type:"text",     icon:"key"   },
-    { key:"password", label:"Contraseña",          type:"password", icon:"lock"  },
-    { key:"notes",    label:"Notas",               type:"textarea", icon:"note"  },
+    { key:"url",      label:"Sitio web / URL",      type:"text",     icon:"globe",  placeholder:"https://ejemplo.com" },
+    { key:"username", label:"Usuario o email",       type:"text",     icon:"user",   placeholder:"usuario@email.com"   },
+    { key:"password", label:"Contraseña",            type:"password", icon:"lock",   placeholder:"contraseña"          },
+    { key:"notes",    label:"Notas",                 type:"textarea", icon:"note",   placeholder:"Notas adicionales…"  },
   ],
   card: [
-    { key:"cardNumber", label:"Número de tarjeta",   type:"text",     icon:"card" },
-    { key:"holder",     label:"Titular",             type:"text",     icon:"key"  },
-    { key:"expiry",     label:"Vencimiento (MM/AA)", type:"text",     icon:"key"  },
-    { key:"cvv",        label:"CVV",                 type:"password", icon:"lock" },
-    { key:"pin",        label:"PIN",                 type:"password", icon:"lock" },
-    { key:"notes",      label:"Notas",               type:"textarea", icon:"note" },
+    { key:"cardNumber", label:"Número de tarjeta",   type:"text",     icon:"card",   placeholder:"0000 0000 0000 0000" },
+    { key:"holder",     label:"Titular",             type:"text",     icon:"user",   placeholder:"Nombre Apellido"     },
+    { key:"expiry",     label:"Vencimiento",         type:"text",     icon:"clock",  placeholder:"MM/AA"               },
+    { key:"cvv",        label:"CVV / CVC",           type:"password", icon:"lock",   placeholder:"•••"                 },
+    { key:"pin",        label:"PIN",                 type:"password", icon:"hash",   placeholder:"••••"                },
+    { key:"bank",       label:"Banco / Entidad",     type:"text",     icon:"database",placeholder:"Nombre del banco"  },
+    { key:"notes",      label:"Notas",               type:"textarea", icon:"note",   placeholder:"Notas adicionales…"  },
   ],
   wifi: [
-    { key:"ssid",     label:"Nombre de red (SSID)",  type:"text",     icon:"wifi"   },
-    { key:"password", label:"Contraseña",            type:"password", icon:"lock"   },
-    { key:"security", label:"Seguridad (WPA2/WPA3)", type:"text",     icon:"shield" },
-    { key:"notes",    label:"Notas",                 type:"textarea", icon:"note"   },
+    { key:"ssid",       label:"Nombre de red (SSID)",type:"text",     icon:"wifi",   placeholder:"MiRedWiFi"           },
+    { key:"password",   label:"Contraseña WiFi",     type:"password", icon:"lock",   placeholder:"contraseña"          },
+    { key:"security",   label:"Seguridad",           type:"text",     icon:"shield", placeholder:"WPA2 / WPA3"         },
+    { key:"router",     label:"Modelo de router",    type:"text",     icon:"globe",  placeholder:"Marca y modelo"      },
+    { key:"notes",      label:"Notas",               type:"textarea", icon:"note",   placeholder:"Notas adicionales…"  },
   ],
-  note:     [{ key:"content", label:"Contenido", type:"textarea", icon:"note" }],
+  note: [
+    { key:"content",    label:"Contenido",           type:"textarea", icon:"note",   placeholder:"Escribe tu nota segura aquí…" },
+  ],
   identity: [
-    { key:"fullName", label:"Nombre completo",  type:"text",     icon:"key"  },
-    { key:"idNumber", label:"Nº Documento",     type:"text",     icon:"key"  },
-    { key:"dob",      label:"Fecha nacimiento", type:"text",     icon:"key"  },
-    { key:"address",  label:"Dirección",        type:"textarea", icon:"note" },
-    { key:"phone",    label:"Teléfono",         type:"text",     icon:"key"  },
-    { key:"notes",    label:"Notas",            type:"textarea", icon:"note" },
+    { key:"fullName",   label:"Nombre completo",     type:"text",     icon:"user",   placeholder:"Nombre Apellido"     },
+    { key:"idNumber",   label:"Nº Documento (DNI/NIE/Pasaporte)", type:"text", icon:"hash", placeholder:"12345678A" },
+    { key:"dob",        label:"Fecha de nacimiento", type:"text",     icon:"clock",  placeholder:"DD/MM/AAAA"          },
+    { key:"nationality",label:"Nacionalidad",        type:"text",     icon:"globe",  placeholder:"Española"            },
+    { key:"address",    label:"Dirección",           type:"textarea", icon:"note",   placeholder:"Calle, número, ciudad…" },
+    { key:"phone",      label:"Teléfono",            type:"text",     icon:"phone",  placeholder:"+34 600 000 000"     },
+    { key:"email",      label:"Email",               type:"text",     icon:"user",   placeholder:"email@ejemplo.com"   },
+    { key:"notes",      label:"Notas",               type:"textarea", icon:"note",   placeholder:"Notas adicionales…"  },
   ],
 };
 
-// ─── UTILS ─────────────────────────────────────────────────────────────
-function generatePassword(length=20) {
-  const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+[]{}";
-  return Array.from(crypto.getRandomValues(new Uint8Array(length))).map(b=>chars[b%chars.length]).join("");
+// ─── UTILS ─────────────────────────────────────────────────────────────────
+function genPassword(len=20) {
+  const c = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+[]{}";
+  return Array.from(crypto.getRandomValues(new Uint8Array(len))).map(b=>c[b%c.length]).join("");
 }
-
-function passwordStrength(pw) {
+function pwStrength(pw) {
   if (!pw) return { score:0, label:"", color:"#374151" };
-  let score = 0;
-  if (pw.length>=8) score++; if (pw.length>=16) score++;
-  if (/[A-Z]/.test(pw)) score++; if (/[0-9]/.test(pw)) score++; if (/[^A-Za-z0-9]/.test(pw)) score++;
-  const map = [
+  let s=0;
+  if(pw.length>=8)s++; if(pw.length>=16)s++;
+  if(/[A-Z]/.test(pw))s++; if(/[0-9]/.test(pw))s++; if(/[^A-Za-z0-9]/.test(pw))s++;
+  return [
     {label:"Muy débil",color:"#EF4444"},{label:"Débil",color:"#F97316"},
     {label:"Regular",color:"#EAB308"},{label:"Buena",color:"#84CC16"},
     {label:"Fuerte",color:"#22C55E"},{label:"Muy fuerte",color:"#10B981"},
-  ];
-  return { score, ...map[score] };
+  ][s];
 }
-
-function formatDate(iso) {
-  if (!iso) return "—";
-  const d = new Date(iso);
+function fmtDate(iso) {
+  if(!iso) return "—";
+  const d=new Date(iso);
   return d.toLocaleDateString("es-ES",{day:"2-digit",month:"short",year:"numeric"})
-    + " · " + d.toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"});
+    +" · "+d.toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"});
 }
-
 function daysSince(iso) {
-  if (!iso) return null;
-  return Math.floor((Date.now()-new Date(iso).getTime())/(1000*60*60*24));
+  if(!iso) return null;
+  return Math.floor((Date.now()-new Date(iso).getTime())/(864e5));
 }
+const getCat = id => CATEGORIES.find(c=>c.id===id)||CATEGORIES[0];
 
-// ─── MAIN APP ──────────────────────────────────────────────────────────
+// ─── MAIN APP ──────────────────────────────────────────────────────────────
 export default function VaultApp() {
-  const [phase,setPhase]                   = useState("boot");
-  const [masterPw,setMasterPw]             = useState("");
-  const [confirmPw,setConfirmPw]           = useState("");
-  const [showPw,setShowPw]                 = useState(false);
-  const [entries,setEntries]               = useState([]);
-  const [search,setSearch]                 = useState("");
-  const [filterCat,setFilterCat]           = useState("all");
-  const [activeEntry,setActiveEntry]       = useState(null);
-  const [activePanel,setActivePanel]       = useState("vault");
-  const [toast,setToast]                   = useState(null);
-  const [loading,setLoading]               = useState(false);
-  const [revealFields,setRevealFields]     = useState({});
-  const [editData,setEditData]             = useState({});
-  const [selectedCat,setSelectedCat]       = useState("password");
-  const [showDeleteConfirm,setShowDeleteConfirm] = useState(null);
-  const [backupLog,setBackupLog]           = useState([]);
-  const [importLoading,setImportLoading]   = useState(false);
+  const [phase,setPhase]             = useState("boot");
+  const [masterPw,setMasterPw]       = useState("");
+  const [confirmPw,setConfirmPw]     = useState("");
+  const [showPw,setShowPw]           = useState(false);
+  const [entries,setEntries]         = useState([]);
+  const [search,setSearch]           = useState("");
+  const [filterCat,setFilterCat]     = useState("all");
+  const [activeEntry,setActiveEntry] = useState(null);  // {mode,data}
+  const [panel,setPanel]             = useState("vault"); // vault|backup
+  const [toast,setToast]             = useState(null);
+  const [loading,setLoading]         = useState(false);
+  const [revealed,setRevealed]       = useState({});
+  const [editData,setEditData]       = useState({});
+  const [editCat,setEditCat]         = useState("password");
+  const [delConfirm,setDelConfirm]   = useState(null);
+  const [backupLog,setBackupLog]     = useState([]);
+  const [importing,setImporting]     = useState(false);
+  const [sidebarOpen,setSidebarOpen] = useState(false);
   const autoLockRef = useRef(null);
 
-  useEffect(() => {
-    setPhase(loadEncrypted() ? "unlock" : "setup");
-    setBackupLog(loadBackupLog());
-  }, []);
+  // ── Boot
+  useEffect(()=>{ setPhase(loadEncrypted()?"unlock":"setup"); setBackupLog(loadBackupLog()); },[]);
 
-  const resetAutoLock = useCallback(() => {
-    if (autoLockRef.current) clearTimeout(autoLockRef.current);
-    autoLockRef.current = setTimeout(() => {
+  // ── Auto-lock 3min
+  const resetLock = useCallback(()=>{
+    clearTimeout(autoLockRef.current);
+    autoLockRef.current = setTimeout(()=>{
       setPhase("unlock"); setEntries([]); setMasterPw("");
-      showToast("🔒 Bóveda bloqueada por inactividad","info");
+      notify("🔒 Bóveda bloqueada por inactividad","info");
     }, 3*60*1000);
   },[]);
+  useEffect(()=>{
+    if(phase!=="vault") return;
+    const evts=["mousemove","keydown","touchstart","click","scroll"];
+    evts.forEach(e=>window.addEventListener(e,resetLock,{passive:true}));
+    resetLock();
+    return()=>evts.forEach(e=>window.removeEventListener(e,resetLock));
+  },[phase,resetLock]);
 
-  useEffect(() => {
-    if (phase!=="vault") return;
-    const evts = ["mousemove","keydown","touchstart","click"];
-    evts.forEach(e=>window.addEventListener(e,resetAutoLock));
-    resetAutoLock();
-    return ()=>evts.forEach(e=>window.removeEventListener(e,resetAutoLock));
-  },[phase,resetAutoLock]);
+  const notify = (msg,type="success")=>{ setToast({msg,type}); setTimeout(()=>setToast(null),3500); };
 
-  const showToast = (msg,type="success") => {
-    setToast({msg,type}); setTimeout(()=>setToast(null),3500);
-  };
-
-  const persistVault = useCallback(async(data,pw) => {
-    const enc = await encryptVault(data,pw); saveEncrypted(enc);
+  const persist = useCallback(async(data,pw)=>{
+    saveEncrypted(await encryptVault(data,pw));
   },[]);
 
-  const handleSetup = async() => {
-    if (masterPw.length<8) return showToast("Mínimo 8 caracteres","error");
-    if (masterPw!==confirmPw) return showToast("Las contraseñas no coinciden","error");
-    setLoading(true); await persistVault([],masterPw); setLoading(false);
-    setEntries([]); setPhase("vault"); showToast("✅ Bóveda creada correctamente");
+  const handleSetup = async()=>{
+    if(masterPw.length<8) return notify("Mínimo 8 caracteres","error");
+    if(masterPw!==confirmPw) return notify("Las contraseñas no coinciden","error");
+    setLoading(true); await persist([],masterPw); setLoading(false);
+    setEntries([]); setPhase("vault"); notify("✅ Bóveda creada");
   };
 
-  const handleUnlock = async() => {
-    if (!masterPw) return; setLoading(true);
+  const handleUnlock = async()=>{
+    if(!masterPw) return; setLoading(true);
     try {
-      const data = await decryptVault(loadEncrypted(),masterPw);
-      setEntries(data); setPhase("vault"); showToast("✅ Bóveda desbloqueada");
-    } catch { showToast("Contraseña maestra incorrecta","error"); }
+      const data=await decryptVault(loadEncrypted(),masterPw);
+      setEntries(data); setPhase("vault"); notify("✅ Bóveda desbloqueada");
+    } catch { notify("Contraseña incorrecta","error"); }
     setLoading(false);
   };
 
-  const handleSaveEntry = async() => {
-    if (!editData.title?.trim()) return showToast("El título es obligatorio","error");
+  // ── FIX: guardar con la categoría correcta
+  const handleSave = async()=>{
+    if(!editData.title?.trim()) return notify("El título es obligatorio","error");
     let updated;
-    if (activeEntry.mode==="new") {
-      updated = [...entries,{...editData,id:Date.now().toString(),category:selectedCat,
-        createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}];
+    if(activeEntry.mode==="new") {
+      // editCat contiene la categoría seleccionada al crear
+      updated=[...entries,{
+        ...editData,
+        id: Date.now().toString(),
+        category: editCat,           // ← categoría correcta
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }];
     } else {
-      updated = entries.map(e=>e.id===activeEntry.data.id
-        ?{...e,...editData,updatedAt:new Date().toISOString()}:e);
+      updated=entries.map(e=>e.id===activeEntry.data.id
+        ?{...e,...editData, category:editCat, updatedAt:new Date().toISOString()}:e);
     }
-    setEntries(updated); await persistVault(updated,masterPw);
-    setActiveEntry(null); setEditData({}); showToast("✅ Entrada guardada");
+    setEntries(updated); await persist(updated,masterPw);
+    setActiveEntry(null); setEditData({}); notify("✅ Entrada guardada");
   };
 
-  const handleDelete = async(id) => {
-    const updated = entries.filter(e=>e.id!==id);
-    setEntries(updated); await persistVault(updated,masterPw);
-    setActiveEntry(null); setShowDeleteConfirm(null); showToast("🗑️ Entrada eliminada");
+  const handleDelete = async(id)=>{
+    const updated=entries.filter(e=>e.id!==id);
+    setEntries(updated); await persist(updated,masterPw);
+    setActiveEntry(null); setDelConfirm(null); notify("🗑️ Eliminada");
   };
 
-  const handleExport = async() => {
-    const stored = loadEncrypted();
-    if (!stored) return showToast("No hay datos para exportar","error");
-    const payload = { version:"1.0", app:"VAULT", exportedAt:new Date().toISOString(), entries:entries.length, vault:stored };
-    const blob = new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement("a");
-    a.href=url; a.download=`vault-backup-${new Date().toISOString().slice(0,10)}.vault`; a.click();
-    URL.revokeObjectURL(url);
+  // ── Export
+  const handleExport = async()=>{
+    const stored=loadEncrypted();
+    if(!stored) return notify("No hay datos","error");
+    const blob=new Blob([JSON.stringify({version:"1.0",app:"VAULT",exportedAt:new Date().toISOString(),entries:entries.length,vault:stored},null,2)],{type:"application/json"});
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(blob);
+    a.download=`vault-backup-${new Date().toISOString().slice(0,10)}.vault`;
+    a.click(); URL.revokeObjectURL(a.href);
     addBackupEntry(entries.length); setBackupLog(loadBackupLog());
-    showToast(`📦 Backup de ${entries.length} entradas exportado`);
+    notify(`📦 Backup de ${entries.length} entradas exportado`);
   };
 
-  const handleImport = (e) => {
-    const file = e.target.files[0]; if (!file) return;
-    setImportLoading(true);
-    const reader = new FileReader();
-    reader.onload = async(ev) => {
+  // ── FIX: import acepta .vault, .json y cualquier archivo en iOS
+  const handleImport = e=>{
+    const file=e.target.files[0]; if(!file) return;
+    setImporting(true);
+    const reader=new FileReader();
+    reader.onload=async ev=>{
       try {
-        const parsed   = JSON.parse(ev.target.result);
-        const vaultData = parsed.vault || parsed;
-        const data = await decryptVault(typeof vaultData==="string"?vaultData:JSON.stringify(vaultData),masterPw);
-        setEntries(data); await persistVault(data,masterPw);
-        showToast(`✅ ${data.length} entradas restauradas`);
-      } catch { showToast("Error: contraseña incorrecta o archivo dañado","error"); }
-      setImportLoading(false);
+        const text=ev.target.result;
+        const parsed=JSON.parse(text);
+        const raw=parsed.vault||parsed;
+        const data=await decryptVault(typeof raw==="string"?raw:JSON.stringify(raw),masterPw);
+        setEntries(data); await persist(data,masterPw);
+        notify(`✅ ${data.length} entradas restauradas`);
+      } catch(err) {
+        notify("Error: contraseña incorrecta o archivo dañado","error");
+      }
+      setImporting(false);
     };
     reader.readAsText(file); e.target.value="";
   };
 
-  const copyToClipboard = (val) => { navigator.clipboard.writeText(val); showToast("📋 Copiado al portapapeles"); };
-  const getCatConfig = (id) => CATEGORIES.find(c=>c.id===id)||CATEGORIES[0];
+  const copy = val=>{ navigator.clipboard?.writeText(val); notify("📋 Copiado"); };
 
-  const filteredEntries = entries.filter(e=>{
-    const matchCat = filterCat==="all"||e.category===filterCat;
-    const q = search.toLowerCase();
-    const matchSearch = !q||e.title?.toLowerCase().includes(q)||
+  const filtered=entries.filter(e=>{
+    const mc=filterCat==="all"||e.category===filterCat;
+    const q=search.toLowerCase();
+    const ms=!q||e.title?.toLowerCase().includes(q)||
       Object.values(e).some(v=>typeof v==="string"&&v.toLowerCase().includes(q));
-    return matchCat&&matchSearch;
+    return mc&&ms;
   });
-  const catCounts = {};
-  entries.forEach(e=>{ catCounts[e.category]=(catCounts[e.category]||0)+1; });
+  const counts={}; entries.forEach(e=>{ counts[e.category]=(counts[e.category]||0)+1; });
 
-  const lastBackup  = backupLog[0];
-  const daysSinceBk = daysSince(lastBackup?.date);
-  const bkWarn      = daysSinceBk===null||daysSinceBk>7;
+  const lastBk=backupLog[0];
+  const dSince=daysSince(lastBk?.date);
+  const bkWarn=dSince===null||dSince>7;
 
-  const bgGrid = {
-    position:"fixed",inset:0,
-    backgroundImage:"linear-gradient(rgba(96,165,250,0.03) 1px, transparent 1px),linear-gradient(90deg, rgba(96,165,250,0.03) 1px, transparent 1px)",
-    backgroundSize:"40px 40px",pointerEvents:"none",zIndex:0,
-  };
-  const appBase = {
-    minHeight:"100vh",background:"#0A0D14",color:"#E2E8F0",
-    fontFamily:"'DM Mono','Fira Code','Courier New',monospace",
-    position:"relative",overflowX:"hidden",
+  // ── STYLES (responsive-first) ──────────────────────────────────────────
+  const isMobile = typeof window!=="undefined" && window.innerWidth<640;
+
+  const css = {
+    app: {
+      minHeight:"100vh", minHeight:"100dvh",
+      background:"#0A0D14", color:"#E2E8F0",
+      fontFamily:"'DM Mono','Fira Code','Courier New',monospace",
+      overflowX:"hidden", position:"relative",
+    },
+    grid: {
+      position:"fixed",inset:0,
+      backgroundImage:"linear-gradient(rgba(96,165,250,0.03) 1px,transparent 1px),linear-gradient(90deg,rgba(96,165,250,0.03) 1px,transparent 1px)",
+      backgroundSize:"40px 40px",pointerEvents:"none",zIndex:0,
+    },
   };
 
   // ── BOOT
-  if (phase==="boot") return (
-    <div style={{...appBase,display:"flex",alignItems:"center",justifyContent:"center"}}>
-      <div style={bgGrid}/>
-      <div style={{position:"relative",zIndex:1,textAlign:"center"}}>
+  if(phase==="boot") return (
+    <div style={{...css.app,display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div style={css.grid}/>
+      <div style={{textAlign:"center",zIndex:1,position:"relative"}}>
         <div style={{fontSize:48}}>🔐</div>
-        <p style={{color:"#64748B",marginTop:8}}>Iniciando bóveda…</p>
+        <p style={{color:"#64748B",marginTop:8,fontSize:14}}>Iniciando bóveda…</p>
       </div>
     </div>
   );
 
   // ── SETUP / UNLOCK
-  if (phase==="setup"||phase==="unlock") {
-    const isSetup  = phase==="setup";
-    const strength = isSetup?passwordStrength(masterPw):null;
+  if(phase==="setup"||phase==="unlock") {
+    const isSetup=phase==="setup";
+    const str=isSetup?pwStrength(masterPw):null;
     return (
-      <div style={{...appBase,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
-        <div style={bgGrid}/>
-        <div style={{position:"fixed",top:"20%",left:"50%",transform:"translateX(-50%)",width:400,height:400,borderRadius:"50%",background:"radial-gradient(circle,rgba(96,165,250,0.08) 0%,transparent 70%)",pointerEvents:"none",zIndex:0}}/>
-        <div style={{position:"relative",zIndex:1,width:"100%",maxWidth:400,background:"rgba(15,20,30,0.95)",border:"1px solid rgba(96,165,250,0.15)",borderRadius:20,padding:"40px 36px",boxShadow:"0 0 60px rgba(96,165,250,0.05),0 24px 48px rgba(0,0,0,0.5)"}}>
-          <div style={{textAlign:"center",marginBottom:36}}>
-            <div style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:72,height:72,borderRadius:20,background:"linear-gradient(135deg,#1E3A5F 0%,#0F172A 100%)",border:"1px solid rgba(96,165,250,0.3)",marginBottom:20,boxShadow:"0 0 30px rgba(96,165,250,0.1)"}}>
-              <Icon d={icons.shield} size={36} stroke="#60A5FA"/>
+      <div style={{...css.app,display:"flex",alignItems:"center",justifyContent:"center",padding:"16px"}}>
+        <div style={css.grid}/>
+        <div style={{
+          position:"relative",zIndex:1,
+          width:"100%",maxWidth:420,
+          background:"rgba(15,20,30,0.97)",
+          border:"1px solid rgba(96,165,250,0.15)",
+          borderRadius:20,
+          // FIX: padding responsive, no overflow en móvil
+          padding:"clamp(24px,5vw,40px) clamp(20px,5vw,36px)",
+          boxShadow:"0 0 60px rgba(96,165,250,0.05),0 24px 48px rgba(0,0,0,0.5)",
+          boxSizing:"border-box",
+        }}>
+          {/* Logo */}
+          <div style={{textAlign:"center",marginBottom:32}}>
+            <div style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:68,height:68,borderRadius:18,background:"linear-gradient(135deg,#1E3A5F,#0F172A)",border:"1px solid rgba(96,165,250,0.3)",marginBottom:16,boxShadow:"0 0 30px rgba(96,165,250,0.1)"}}>
+              <Icon d={IC.shield} size={34} stroke="#60A5FA"/>
             </div>
             <h1 style={{margin:0,fontSize:22,fontWeight:700,color:"#F1F5F9",letterSpacing:"-0.5px"}}>VAULT</h1>
-            <p style={{margin:"6px 0 0",fontSize:12,color:"#475569",letterSpacing:"3px",textTransform:"uppercase"}}>
+            <p style={{margin:"4px 0 0",fontSize:11,color:"#475569",letterSpacing:"3px",textTransform:"uppercase"}}>
               {isSetup?"Configuración inicial":"Acceso seguro"}
             </p>
           </div>
-          <div style={{display:"flex",flexDirection:"column",gap:16}}>
+
+          <div style={{display:"flex",flexDirection:"column",gap:14}}>
             {isSetup&&(
-              <div style={{background:"rgba(96,165,250,0.05)",border:"1px solid rgba(96,165,250,0.1)",borderRadius:10,padding:"12px 14px",fontSize:12,color:"#64748B",lineHeight:1.6}}>
+              <div style={{background:"rgba(96,165,250,0.05)",border:"1px solid rgba(96,165,250,0.1)",borderRadius:10,padding:"10px 14px",fontSize:11,color:"#64748B",lineHeight:1.7}}>
                 🔐 AES-256-GCM · PBKDF2 · {PBKDF2_ITERATIONS.toLocaleString()} iteraciones<br/>
-                Tu contraseña maestra <strong style={{color:"#94A3B8"}}>nunca sale del dispositivo</strong>
+                Contraseña maestra <strong style={{color:"#94A3B8"}}>nunca sale del dispositivo</strong>
               </div>
             )}
-            <PasswordField label="Contraseña maestra" value={masterPw} onChange={setMasterPw} show={showPw} onToggle={()=>setShowPw(p=>!p)} autoFocus onKeyDown={e=>e.key==="Enter"&&(isSetup?confirmPw&&handleSetup():handleUnlock())}/>
-            {isSetup&&strength?.label&&(
+
+            {/* FIX: campo de contraseña con width:100% y box-sizing */}
+            <PwField label="Contraseña maestra" value={masterPw} onChange={setMasterPw}
+              show={showPw} onToggle={()=>setShowPw(p=>!p)} autoFocus
+              onKeyDown={e=>e.key==="Enter"&&(isSetup?confirmPw&&handleSetup():handleUnlock())}/>
+
+            {isSetup&&str?.label&&(
               <div style={{display:"flex",alignItems:"center",gap:8}}>
                 <div style={{flex:1,height:3,background:"#1E293B",borderRadius:99,overflow:"hidden"}}>
-                  <div style={{height:"100%",borderRadius:99,width:`${(strength.score/5)*100}%`,background:strength.color,transition:"all 0.3s ease"}}/>
+                  <div style={{height:"100%",width:`${(str.score/5)*100}%`,background:str.color,borderRadius:99,transition:"all 0.3s"}}/>
                 </div>
-                <span style={{fontSize:11,color:strength.color,minWidth:80}}>{strength.label}</span>
+                <span style={{fontSize:11,color:str.color,whiteSpace:"nowrap"}}>{str.label}</span>
               </div>
             )}
+
             {isSetup&&(
-              <PasswordField label="Confirmar contraseña" value={confirmPw} onChange={setConfirmPw} show={showPw} onToggle={()=>setShowPw(p=>!p)} onKeyDown={e=>e.key==="Enter"&&masterPw&&handleSetup()}/>
+              <PwField label="Confirmar contraseña" value={confirmPw} onChange={setConfirmPw}
+                show={showPw} onToggle={()=>setShowPw(p=>!p)}
+                onKeyDown={e=>e.key==="Enter"&&masterPw&&handleSetup()}/>
             )}
-            <button onClick={isSetup?handleSetup:handleUnlock} disabled={loading||!masterPw} style={{width:"100%",padding:"14px",background:loading||!masterPw?"rgba(96,165,250,0.1)":"linear-gradient(135deg,#1D4ED8 0%,#1E40AF 100%)",border:"1px solid rgba(96,165,250,0.3)",borderRadius:10,color:"#E2E8F0",fontSize:14,fontWeight:600,cursor:loading||!masterPw?"not-allowed":"pointer",letterSpacing:"1px",textTransform:"uppercase",fontFamily:"inherit",transition:"all 0.2s"}}>
+
+            <button onClick={isSetup?handleSetup:handleUnlock}
+              disabled={loading||!masterPw}
+              style={{width:"100%",padding:"13px",background:loading||!masterPw?"rgba(96,165,250,0.08)":"linear-gradient(135deg,#1D4ED8,#1E40AF)",border:"1px solid rgba(96,165,250,0.3)",borderRadius:10,color:"#E2E8F0",fontSize:14,fontWeight:600,cursor:loading||!masterPw?"not-allowed":"pointer",letterSpacing:"1px",textTransform:"uppercase",fontFamily:"inherit"}}>
               {loading?"⏳ Procesando…":isSetup?"Crear Bóveda":"Desbloquear"}
             </button>
           </div>
-          <div style={{textAlign:"center",marginTop:24,color:"#334155",fontSize:11}}>Cifrado de extremo a extremo · Sin servidores externos</div>
+
+          <p style={{textAlign:"center",marginTop:20,color:"#334155",fontSize:10}}>
+            Cifrado local · Sin servidores externos
+          </p>
         </div>
+
+        {/* Toast */}
+        {toast&&<Toast msg={toast.msg} type={toast.type}/>}
+
+        <style>{globalCSS}</style>
       </div>
     );
   }
 
-  // ── VAULT UI
+  // ── VAULT ─────────────────────────────────────────────────────────────
   return (
-    <div style={{...appBase,display:"flex",flexDirection:"column",alignItems:"center"}}>
-      <div style={bgGrid}/>
+    <div style={css.app}>
+      <div style={css.grid}/>
+      {toast&&<Toast msg={toast.msg} type={toast.type}/>}
 
-      {toast&&(
-        <div style={{position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",background:toast.type==="error"?"rgba(239,68,68,0.95)":toast.type==="info"?"rgba(59,130,246,0.95)":"rgba(16,185,129,0.95)",color:"#fff",padding:"10px 20px",borderRadius:10,fontSize:13,zIndex:9999,boxShadow:"0 4px 20px rgba(0,0,0,0.4)",fontFamily:"inherit",letterSpacing:"0.3px",animation:"fadeIn 0.2s ease",whiteSpace:"nowrap"}}>
-          {toast.msg}
+      {/* ── HEADER */}
+      <header style={{
+        display:"flex",alignItems:"center",gap:10,
+        padding:"12px 16px",
+        background:"rgba(10,13,20,0.97)",
+        borderBottom:"1px solid rgba(96,165,250,0.1)",
+        position:"sticky",top:0,zIndex:200,
+        // FIX: no overflow
+        boxSizing:"border-box",width:"100%",
+      }}>
+        {/* Hamburger en móvil */}
+        <button onClick={()=>setSidebarOpen(p=>!p)} style={btnIcon} title="Categorías">
+          <Icon d={IC.menu} size={18} stroke="#64748B"/>
+        </button>
+
+        {/* Logo */}
+        <div style={{display:"flex",alignItems:"center",gap:8,flex:1,minWidth:0}}>
+          <Icon d={IC.shield} size={20} stroke="#60A5FA"/>
+          <span style={{fontSize:15,fontWeight:700,color:"#F1F5F9",letterSpacing:"2px"}}>VAULT</span>
+          <span style={{fontSize:10,padding:"1px 6px",background:"rgba(96,165,250,0.1)",border:"1px solid rgba(96,165,250,0.2)",borderRadius:4,color:"#60A5FA",whiteSpace:"nowrap"}}>
+            {entries.length}
+          </span>
         </div>
-      )}
 
-      <div style={{width:"100%",maxWidth:960,position:"relative",zIndex:1,display:"flex",flexDirection:"column",minHeight:"100vh"}}>
+        {/* Nav tabs */}
+        <div style={{display:"flex",gap:4}}>
+          {[{id:"vault",label:"Bóveda",icon:IC.database},{id:"backup",label:"Backup",icon:IC.backup,warn:bkWarn}].map(t=>(
+            <button key={t.id} onClick={()=>setPanel(t.id)} style={{
+              display:"flex",alignItems:"center",gap:5,
+              padding:"6px 10px",borderRadius:8,
+              background:panel===t.id?"rgba(96,165,250,0.12)":"transparent",
+              border:`1px solid ${panel===t.id?"rgba(96,165,250,0.25)":"transparent"}`,
+              color:panel===t.id?"#93C5FD":"#475569",
+              cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:panel===t.id?600:400,
+              position:"relative",
+            }}>
+              <Icon d={t.icon} size={14} stroke={panel===t.id?"#93C5FD":"#475569"}/>
+              <span style={{display:"none"}} className="tab-label">{t.label}</span>
+              {t.warn&&<span style={{position:"absolute",top:-3,right:-3,width:7,height:7,borderRadius:"50%",background:"#F59E0B",boxShadow:"0 0 5px rgba(245,158,11,0.7)"}}/>}
+            </button>
+          ))}
+        </div>
 
-        {/* HEADER */}
-        <header style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 20px",background:"rgba(10,13,20,0.97)",borderBottom:"1px solid rgba(96,165,250,0.1)",backdropFilter:"blur(10px)",position:"sticky",top:0,zIndex:100}}>
-          <div style={{display:"flex",alignItems:"center",gap:10}}>
-            <Icon d={icons.shield} size={22} stroke="#60A5FA"/>
-            <span style={{fontSize:16,fontWeight:700,color:"#F1F5F9",letterSpacing:"2px"}}>VAULT</span>
-            <span style={{fontSize:10,padding:"2px 6px",background:"rgba(96,165,250,0.1)",border:"1px solid rgba(96,165,250,0.2)",borderRadius:4,color:"#60A5FA"}}>{entries.length} entradas</span>
+        {/* Lock */}
+        <button onClick={()=>{setPhase("unlock");setEntries([]);setMasterPw("");}} style={{...btnIcon,borderColor:"rgba(239,68,68,0.2)",color:"#EF4444"}} title="Bloquear">
+          <Icon d={IC.lock} size={16} stroke="#EF4444"/>
+        </button>
+      </header>
+
+      {/* ── BACKUP PANEL */}
+      {panel==="backup"&&(
+        <div style={{padding:"20px 16px",maxWidth:680,margin:"0 auto",boxSizing:"border-box",width:"100%"}}>
+          <h2 style={{margin:"0 0 6px",fontSize:17,color:"#F1F5F9",fontWeight:700}}>Copias de seguridad</h2>
+          <p style={{margin:"0 0 20px",fontSize:12,color:"#475569",lineHeight:1.6}}>
+            El archivo <code style={{color:"#60A5FA",fontSize:11}}>.vault</code> está cifrado con AES-256-GCM. Solo accesible con tu contraseña maestra.
+          </p>
+
+          {/* Status */}
+          <div style={{padding:"16px",borderRadius:14,marginBottom:16,background:bkWarn?"rgba(245,158,11,0.06)":"rgba(16,185,129,0.06)",border:`1px solid ${bkWarn?"rgba(245,158,11,0.2)":"rgba(16,185,129,0.2)"}`}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+              <Icon d={bkWarn?IC.alertTri:IC.check} size={18} stroke={bkWarn?"#F59E0B":"#10B981"}/>
+              <span style={{fontSize:13,fontWeight:600,color:bkWarn?"#FCD34D":"#6EE7B7"}}>
+                {bkWarn?(lastBk?`Último backup hace ${dSince} días`:"Sin backup registrado"):`Backup al día · hace ${dSince===0?"hoy":`${dSince}d`}`}
+              </span>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
+              {[
+                {l:"Entradas",v:entries.length},
+                {l:"Último backup",v:lastBk?fmtDate(lastBk.date).split(" · ")[0]:"Nunca"},
+                {l:"Total backups",v:backupLog.length},
+              ].map(s=>(
+                <div key={s.l} style={{background:"rgba(15,23,42,0.6)",border:"1px solid rgba(96,165,250,0.08)",borderRadius:10,padding:"10px 12px"}}>
+                  <div style={{fontSize:17,fontWeight:700,color:"#E2E8F0"}}>{s.v}</div>
+                  <div style={{fontSize:10,color:"#475569",marginTop:2}}>{s.l}</div>
+                </div>
+              ))}
+            </div>
           </div>
-          <div style={{display:"flex",gap:4}}>
-            {[{id:"vault",label:"Bóveda",icon:icons.database},{id:"backup",label:"Backup",icon:icons.backup,warn:bkWarn}].map(tab=>(
-              <button key={tab.id} onClick={()=>setActivePanel(tab.id)} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:8,background:activePanel===tab.id?"rgba(96,165,250,0.12)":"transparent",border:`1px solid ${activePanel===tab.id?"rgba(96,165,250,0.25)":"transparent"}`,color:activePanel===tab.id?"#93C5FD":"#475569",cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:activePanel===tab.id?600:400,position:"relative"}}>
-                <Icon d={tab.icon} size={14} stroke={activePanel===tab.id?"#93C5FD":"#475569"}/>
-                {tab.label}
-                {tab.warn&&<span style={{position:"absolute",top:-4,right:-4,width:8,height:8,borderRadius:"50%",background:"#F59E0B",boxShadow:"0 0 6px rgba(245,158,11,0.6)"}}/>}
+
+          {/* Actions */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
+            {/* Export */}
+            <div style={{padding:"18px",borderRadius:14,background:"rgba(15,23,42,0.8)",border:"1px solid rgba(96,165,250,0.12)"}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                <div style={{width:36,height:36,borderRadius:9,background:"rgba(96,165,250,0.1)",border:"1px solid rgba(96,165,250,0.2)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                  <Icon d={IC.download} size={16} stroke="#60A5FA"/>
+                </div>
+                <div>
+                  <div style={{fontSize:12,fontWeight:600,color:"#E2E8F0"}}>Exportar</div>
+                  <div style={{fontSize:10,color:"#475569"}}>Descarga .vault</div>
+                </div>
+              </div>
+              <button onClick={handleExport} style={{width:"100%",padding:"10px",background:"linear-gradient(135deg,#1D4ED8,#1E40AF)",border:"1px solid rgba(96,165,250,0.3)",borderRadius:8,color:"#E2E8F0",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:5}}>
+                <Icon d={IC.download} size={13}/>
+                Exportar ahora
               </button>
-            ))}
-          </div>
-          <button onClick={()=>{setPhase("unlock");setEntries([]);setMasterPw("");}} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 12px",borderRadius:8,background:"rgba(239,68,68,0.08)",border:"1px solid rgba(239,68,68,0.2)",color:"#EF4444",cursor:"pointer",fontSize:12,fontFamily:"inherit"}}>
-            <Icon d={icons.lock} size={14} stroke="#EF4444"/>
-            Bloquear
-          </button>
-        </header>
-
-        {/* BACKUP PANEL */}
-        {activePanel==="backup"&&(
-          <div style={{flex:1,padding:"28px 24px",maxWidth:680,width:"100%",margin:"0 auto"}}>
-            <div style={{marginBottom:28}}>
-              <h2 style={{margin:0,fontSize:18,color:"#F1F5F9",fontWeight:700}}>Copias de seguridad</h2>
-              <p style={{margin:"6px 0 0",fontSize:12,color:"#475569",lineHeight:1.6}}>
-                El archivo <code style={{color:"#60A5FA"}}>.vault</code> exportado está cifrado con AES-256-GCM. Solo tú puedes abrirlo con tu contraseña maestra. Guárdalo en un lugar seguro.
-              </p>
             </div>
 
-            {/* Status */}
-            <div style={{padding:"20px 24px",borderRadius:14,marginBottom:20,background:bkWarn?"rgba(245,158,11,0.06)":"rgba(16,185,129,0.06)",border:`1px solid ${bkWarn?"rgba(245,158,11,0.2)":"rgba(16,185,129,0.2)"}`}}>
-              <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
-                <Icon d={bkWarn?icons.alertTri:icons.check} size={20} stroke={bkWarn?"#F59E0B":"#10B981"}/>
-                <span style={{fontSize:14,fontWeight:600,color:bkWarn?"#FCD34D":"#6EE7B7"}}>
-                  {bkWarn
-                    ?(lastBackup?`Último backup hace ${daysSinceBk} días`:"Sin backup registrado")
-                    :`Backup al día · hace ${daysSinceBk===0?"hoy":`${daysSinceBk} día${daysSinceBk>1?"s":""}`}`}
-                </span>
+            {/* Import — FIX: accept ampliado para iOS */}
+            <div style={{padding:"18px",borderRadius:14,background:"rgba(15,23,42,0.8)",border:"1px solid rgba(96,165,250,0.12)"}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                <div style={{width:36,height:36,borderRadius:9,background:"rgba(52,211,153,0.1)",border:"1px solid rgba(52,211,153,0.2)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                  <Icon d={IC.upload} size={16} stroke="#34D399"/>
+                </div>
+                <div>
+                  <div style={{fontSize:12,fontWeight:600,color:"#E2E8F0"}}>Restaurar</div>
+                  <div style={{fontSize:10,color:"#475569"}}>Carga .vault</div>
+                </div>
               </div>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12}}>
-                {[
-                  {label:"Entradas en bóveda",value:entries.length},
-                  {label:"Último backup",value:lastBackup?formatDate(lastBackup.date).split(" · ")[0]:"Nunca"},
-                  {label:"Backups realizados",value:backupLog.length},
-                ].map(stat=>(
-                  <div key={stat.label} style={{background:"rgba(15,23,42,0.6)",border:"1px solid rgba(96,165,250,0.08)",borderRadius:10,padding:"10px 14px"}}>
-                    <div style={{fontSize:18,fontWeight:700,color:"#E2E8F0"}}>{stat.value}</div>
-                    <div style={{fontSize:10,color:"#475569",marginTop:2}}>{stat.label}</div>
+              <button onClick={()=>document.getElementById("vltImport").click()}
+                disabled={importing}
+                style={{width:"100%",padding:"10px",background:importing?"rgba(52,211,153,0.03)":"rgba(52,211,153,0.1)",border:"1px solid rgba(52,211,153,0.25)",borderRadius:8,color:importing?"#475569":"#34D399",fontSize:11,fontWeight:600,cursor:importing?"not-allowed":"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:5}}>
+                <Icon d={importing?IC.refresh:IC.upload} size={13} stroke={importing?"#475569":"#34D399"}/>
+                {importing?"Restaurando…":"Seleccionar archivo"}
+              </button>
+              {/* FIX: accept con tipos MIME amplios + extensiones para que iOS lo muestre */}
+              <input id="vltImport" type="file"
+                accept=".vault,.json,application/json,text/plain,*/*"
+                onChange={handleImport} style={{display:"none"}}/>
+            </div>
+          </div>
+
+          {/* Info */}
+          <div style={{padding:"12px 16px",borderRadius:12,marginBottom:20,background:"rgba(96,165,250,0.04)",border:"1px solid rgba(96,165,250,0.1)",display:"flex",gap:10,alignItems:"flex-start"}}>
+            <Icon d={IC.info} size={15} stroke="#60A5FA"/>
+            <p style={{margin:0,fontSize:11,color:"#475569",lineHeight:1.7}}>
+              <strong style={{color:"#64748B"}}>¿Dónde guardar el backup?</strong><br/>
+              Google Drive · Dropbox · iCloud · Disco externo · Email cifrado
+            </p>
+          </div>
+
+          {/* History */}
+          {backupLog.length>0&&(
+            <div>
+              <h3 style={{margin:"0 0 10px",fontSize:11,color:"#475569",letterSpacing:"2px",textTransform:"uppercase"}}>Historial</h3>
+              <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                {backupLog.map((b,i)=>(
+                  <div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 14px",borderRadius:10,background:"rgba(15,23,42,0.6)",border:"1px solid rgba(96,165,250,0.07)"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
+                      <Icon d={IC.clock} size={13} stroke={i===0?"#60A5FA":"#334155"}/>
+                      <span style={{fontSize:11,color:i===0?"#94A3B8":"#475569",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{fmtDate(b.date)}</span>
+                      {i===0&&<span style={{fontSize:9,padding:"1px 5px",background:"rgba(96,165,250,0.1)",borderRadius:99,color:"#60A5FA",whiteSpace:"nowrap",flexShrink:0}}>ÚLTIMO</span>}
+                    </div>
+                    <span style={{fontSize:11,color:"#334155",flexShrink:0,marginLeft:8}}>{b.entries} ent.</span>
                   </div>
                 ))}
               </div>
             </div>
+          )}
+        </div>
+      )}
 
-            {/* Action cards */}
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:28}}>
-              {/* Export */}
-              <div style={{padding:"24px",borderRadius:14,background:"rgba(15,23,42,0.8)",border:"1px solid rgba(96,165,250,0.12)"}}>
-                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
-                  <div style={{width:40,height:40,borderRadius:10,background:"rgba(96,165,250,0.1)",border:"1px solid rgba(96,165,250,0.2)",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                    <Icon d={icons.download} size={18} stroke="#60A5FA"/>
-                  </div>
-                  <div>
-                    <div style={{fontSize:13,fontWeight:600,color:"#E2E8F0"}}>Exportar backup</div>
-                    <div style={{fontSize:11,color:"#475569"}}>Descarga archivo .vault</div>
-                  </div>
-                </div>
-                <p style={{fontSize:11,color:"#475569",lineHeight:1.6,margin:"0 0 16px"}}>Genera un archivo cifrado con todas tus entradas. Guárdalo fuera del dispositivo.</p>
-                <button onClick={handleExport} style={{width:"100%",padding:"11px",background:"linear-gradient(135deg,#1D4ED8,#1E40AF)",border:"1px solid rgba(96,165,250,0.3)",borderRadius:9,color:"#E2E8F0",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
-                  <Icon d={icons.download} size={14}/>
-                  Exportar ahora
-                </button>
-              </div>
+      {/* ── VAULT PANEL */}
+      {panel==="vault"&&(
+        <div style={{display:"flex",height:"calc(100dvh - 53px)",overflow:"hidden",position:"relative"}}>
 
-              {/* Import */}
-              <div style={{padding:"24px",borderRadius:14,background:"rgba(15,23,42,0.8)",border:"1px solid rgba(96,165,250,0.12)"}}>
-                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
-                  <div style={{width:40,height:40,borderRadius:10,background:"rgba(52,211,153,0.1)",border:"1px solid rgba(52,211,153,0.2)",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                    <Icon d={icons.upload} size={18} stroke="#34D399"/>
-                  </div>
-                  <div>
-                    <div style={{fontSize:13,fontWeight:600,color:"#E2E8F0"}}>Restaurar backup</div>
-                    <div style={{fontSize:11,color:"#475569"}}>Carga archivo .vault</div>
-                  </div>
-                </div>
-                <p style={{fontSize:11,color:"#475569",lineHeight:1.6,margin:"0 0 16px"}}>Restaura entradas desde un archivo .vault. Reemplaza los datos actuales.</p>
-                <button onClick={()=>document.getElementById("importFile").click()} disabled={importLoading} style={{width:"100%",padding:"11px",background:importLoading?"rgba(52,211,153,0.05)":"rgba(52,211,153,0.1)",border:"1px solid rgba(52,211,153,0.25)",borderRadius:9,color:importLoading?"#475569":"#34D399",fontSize:12,fontWeight:600,cursor:importLoading?"not-allowed":"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
-                  <Icon d={importLoading?icons.refresh:icons.upload} size={14} stroke={importLoading?"#475569":"#34D399"}/>
-                  {importLoading?"Restaurando…":"Seleccionar archivo"}
-                </button>
-                <input id="importFile" type="file" accept=".vault,.json" onChange={handleImport} style={{display:"none"}}/>
+          {/* Sidebar overlay en móvil */}
+          {sidebarOpen&&(
+            <div onClick={()=>setSidebarOpen(false)}
+              style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:150}}/>
+          )}
+
+          {/* Sidebar */}
+          <aside style={{
+            width:200,flexShrink:0,
+            background:"rgba(10,13,20,0.97)",
+            borderRight:"1px solid rgba(96,165,250,0.08)",
+            padding:"12px 0",
+            display:"flex",flexDirection:"column",gap:2,
+            // FIX: en móvil es drawer lateral
+            position: "fixed",
+            left: sidebarOpen ? 0 : -220,
+            top: 53,
+            bottom: 0,
+            zIndex: 160,
+            transition:"left 0.25s ease",
+            overflowY:"auto",
+            // En pantallas grandes es siempre visible
+            "@media(min-width:640px)": {position:"static",left:0},
+          }}>
+            <button onClick={()=>{
+              setEditCat("password");
+              setEditData({title:""});
+              setActiveEntry({mode:"new",data:{}});
+              setSidebarOpen(false);
+            }} style={{margin:"0 10px 10px",padding:"10px",background:"linear-gradient(135deg,#1D4ED8,#1E40AF)",border:"1px solid rgba(96,165,250,0.3)",borderRadius:10,color:"#E2E8F0",cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",gap:6,fontFamily:"inherit",fontWeight:600}}>
+              <Icon d={IC.plus} size={14}/>
+              Nueva entrada
+            </button>
+
+            <SideItem label="Todas" count={entries.length} active={filterCat==="all"}
+              onClick={()=>{setFilterCat("all");setSidebarOpen(false);}}/>
+            <div style={{height:1,background:"rgba(96,165,250,0.08)",margin:"6px 10px"}}/>
+            {CATEGORIES.map(cat=>(
+              <SideItem key={cat.id} label={cat.label} count={counts[cat.id]||0}
+                active={filterCat===cat.id} color={cat.color} icon={IC[cat.icon]}
+                onClick={()=>{setFilterCat(cat.id);setSidebarOpen(false);}}/>
+            ))}
+          </aside>
+
+          {/* Lista de entradas */}
+          <main style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0}}>
+            {/* Search */}
+            <div style={{padding:"12px 14px",borderBottom:"1px solid rgba(96,165,250,0.08)",flexShrink:0}}>
+              <div style={{position:"relative"}}>
+                <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:"#475569",pointerEvents:"none"}}>
+                  <Icon d={IC.search} size={15}/>
+                </span>
+                <input value={search} onChange={e=>setSearch(e.target.value)}
+                  placeholder="Buscar…"
+                  style={{width:"100%",padding:"9px 10px 9px 32px",background:"rgba(15,23,42,0.8)",border:"1px solid rgba(96,165,250,0.15)",borderRadius:10,color:"#E2E8F0",fontSize:13,fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}/>
               </div>
             </div>
 
-            {/* Info */}
-            <div style={{padding:"14px 18px",borderRadius:12,marginBottom:28,background:"rgba(96,165,250,0.04)",border:"1px solid rgba(96,165,250,0.1)",display:"flex",gap:12,alignItems:"flex-start"}}>
-              <Icon d={icons.info} size={16} stroke="#60A5FA"/>
-              <p style={{margin:0,fontSize:11,color:"#475569",lineHeight:1.7}}>
-                <strong style={{color:"#64748B"}}>¿Dónde guardar el backup?</strong><br/>
-                Disco externo · Google Drive / Dropbox · Email cifrado · Pendrive seguro.<br/>
-                Recomendamos hacer backup cada vez que añadas entradas importantes.
-              </p>
-            </div>
-
-            {/* History */}
-            {backupLog.length>0&&(
-              <div>
-                <h3 style={{margin:"0 0 12px",fontSize:12,color:"#475569",letterSpacing:"2px",textTransform:"uppercase"}}>Historial de backups</h3>
-                <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                  {backupLog.map((b,i)=>(
-                    <div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 16px",borderRadius:10,background:"rgba(15,23,42,0.6)",border:"1px solid rgba(96,165,250,0.07)"}}>
-                      <div style={{display:"flex",alignItems:"center",gap:10}}>
-                        <Icon d={icons.clock} size={14} stroke={i===0?"#60A5FA":"#334155"}/>
-                        <span style={{fontSize:12,color:i===0?"#94A3B8":"#475569"}}>{formatDate(b.date)}</span>
-                        {i===0&&<span style={{fontSize:9,padding:"1px 6px",background:"rgba(96,165,250,0.1)",border:"1px solid rgba(96,165,250,0.2)",borderRadius:99,color:"#60A5FA"}}>MÁS RECIENTE</span>}
-                      </div>
-                      <span style={{fontSize:11,color:"#334155"}}>{b.entries} entrada{b.entries!==1?"s":""}</span>
+            {/* Entries */}
+            <div style={{flex:1,overflowY:"auto",padding:"10px 12px",display:"flex",flexDirection:"column",gap:7}}>
+              {filtered.length===0?(
+                <div style={{textAlign:"center",padding:"50px 20px",color:"#334155"}}>
+                  <Icon d={IC.shield} size={44} stroke="#1E3A5F"/>
+                  <p style={{marginTop:14,fontSize:13,lineHeight:1.7,color:"#475569"}}>
+                    {entries.length===0?"Tu bóveda está vacía.\nCrea tu primera entrada.":"Sin resultados."}
+                  </p>
+                </div>
+              ):filtered.map(e=>{
+                const cat=getCat(e.category);
+                const isActive=activeEntry?.data?.id===e.id;
+                return (
+                  <div key={e.id}
+                    onClick={()=>{setActiveEntry({mode:"view",data:e});setRevealed({});setSidebarOpen(false);}}
+                    style={{padding:"12px 14px",borderRadius:12,cursor:"pointer",
+                      background:isActive?"rgba(96,165,250,0.08)":"rgba(15,23,42,0.6)",
+                      border:`1px solid ${isActive?"rgba(96,165,250,0.25)":"rgba(96,165,250,0.08)"}`,
+                      display:"flex",alignItems:"center",gap:12,transition:"all 0.15s"}}>
+                    <div style={{width:36,height:36,borderRadius:9,flexShrink:0,background:`${cat.color}15`,border:`1px solid ${cat.color}30`,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                      <Icon d={IC[cat.icon]} size={17} stroke={cat.color}/>
                     </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* VAULT PANEL */}
-        {activePanel==="vault"&&(
-          <div style={{flex:1,display:"flex",overflow:"hidden"}}>
-            <aside style={{width:200,flexShrink:0,background:"rgba(10,13,20,0.8)",borderRight:"1px solid rgba(96,165,250,0.08)",padding:"16px 0",display:"flex",flexDirection:"column",gap:2}}>
-              <button onClick={()=>{setSelectedCat("password");setEditData({title:""});setActiveEntry({mode:"new"});}} style={{margin:"0 12px 12px",padding:"10px",background:"linear-gradient(135deg,#1D4ED8 0%,#1E40AF 100%)",border:"1px solid rgba(96,165,250,0.3)",borderRadius:10,color:"#E2E8F0",cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",gap:6,fontFamily:"inherit",fontWeight:600,letterSpacing:"0.5px"}}>
-                <Icon d={icons.plus} size={14}/> Nueva entrada
-              </button>
-              <SidebarItem label="Todas" count={entries.length} active={filterCat==="all"} onClick={()=>setFilterCat("all")}/>
-              <div style={{height:1,background:"rgba(96,165,250,0.08)",margin:"8px 12px"}}/>
-              {CATEGORIES.map(cat=>(
-                <SidebarItem key={cat.id} label={cat.label} count={catCounts[cat.id]||0} active={filterCat===cat.id} color={cat.color} onClick={()=>setFilterCat(cat.id)} icon={icons[cat.icon]}/>
-              ))}
-            </aside>
-
-            <main style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-              <div style={{padding:"16px 20px",borderBottom:"1px solid rgba(96,165,250,0.08)"}}>
-                <div style={{position:"relative"}}>
-                  <span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",color:"#475569"}}>
-                    <Icon d={icons.search} size={16}/>
-                  </span>
-                  <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar en la bóveda…" style={{width:"100%",padding:"10px 12px 10px 36px",background:"rgba(15,23,42,0.8)",border:"1px solid rgba(96,165,250,0.15)",borderRadius:10,color:"#E2E8F0",fontSize:13,fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}/>
-                </div>
-              </div>
-              <div style={{flex:1,overflowY:"auto",padding:"12px 20px",display:"flex",flexDirection:"column",gap:8}}>
-                {filteredEntries.length===0?(
-                  <div style={{textAlign:"center",padding:"60px 20px",color:"#334155"}}>
-                    <Icon d={icons.shield} size={48} stroke="#1E3A5F"/>
-                    <p style={{marginTop:16,fontSize:14,lineHeight:1.7}}>
-                      {entries.length===0?"Tu bóveda está vacía.\nCrea tu primera entrada.":"No se encontraron resultados."}
-                    </p>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:13,fontWeight:600,color:"#E2E8F0",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.title}</div>
+                      <div style={{fontSize:11,color:"#475569",marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                        {e.username||e.ssid||e.cardNumber?.replace(/(.{4})/g,"$1 ").trim()||cat.label}
+                      </div>
+                    </div>
+                    <div style={{fontSize:10,color:"#334155",flexShrink:0}}>{new Date(e.updatedAt).toLocaleDateString("es-ES",{day:"2-digit",month:"2-digit"})}</div>
                   </div>
-                ):filteredEntries.map(entry=>{
-                  const cat = getCatConfig(entry.category);
-                  return (
-                    <div key={entry.id} onClick={()=>{setActiveEntry({mode:"view",data:entry});setRevealFields({});}} style={{padding:"14px 16px",borderRadius:12,cursor:"pointer",background:activeEntry?.data?.id===entry.id?"rgba(96,165,250,0.08)":"rgba(15,23,42,0.6)",border:`1px solid ${activeEntry?.data?.id===entry.id?"rgba(96,165,250,0.25)":"rgba(96,165,250,0.08)"}`,display:"flex",alignItems:"center",gap:14,transition:"all 0.15s ease"}}>
-                      <div style={{width:38,height:38,borderRadius:10,flexShrink:0,background:`${cat.color}15`,border:`1px solid ${cat.color}30`,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                        <Icon d={icons[cat.icon]} size={18} stroke={cat.color}/>
-                      </div>
-                      <div style={{flex:1,minWidth:0}}>
-                        <div style={{fontSize:13,fontWeight:600,color:"#E2E8F0",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{entry.title}</div>
-                        <div style={{fontSize:11,color:"#475569",marginTop:2}}>{entry.username||entry.ssid||cat.label}</div>
-                      </div>
-                      <div style={{fontSize:10,color:"#334155",flexShrink:0}}>{new Date(entry.updatedAt).toLocaleDateString("es-ES")}</div>
-                    </div>
-                  );
-                })}
-              </div>
-            </main>
+                );
+              })}
+            </div>
+          </main>
 
-            {activeEntry&&(
-              <EntryPanel mode={activeEntry.mode} data={activeEntry.mode==="new"?{}:activeEntry.data}
-                editData={editData} setEditData={setEditData}
-                selectedCat={selectedCat} setSelectedCat={setSelectedCat}
-                revealFields={revealFields} setRevealFields={setRevealFields}
-                onSave={handleSaveEntry}
-                onClose={()=>{setActiveEntry(null);setEditData({});}}
-                onEdit={()=>{setEditData({...activeEntry.data});setSelectedCat(activeEntry.data.category);setActiveEntry({mode:"edit",data:activeEntry.data});}}
-                onDelete={()=>setShowDeleteConfirm(activeEntry.data.id)}
-                onCopy={copyToClipboard}
-                getCatConfig={getCatConfig}/>
-            )}
-          </div>
-        )}
-      </div>
+          {/* Detail panel */}
+          {activeEntry&&(
+            <DetailPanel
+              mode={activeEntry.mode}
+              data={activeEntry.data}
+              editData={editData} setEditData={setEditData}
+              editCat={editCat} setEditCat={cat=>{
+                setEditCat(cat);
+                setEditData(d=>({title:d.title})); // limpiar campos al cambiar categoría
+              }}
+              revealed={revealed} setRevealed={setRevealed}
+              onSave={handleSave}
+              onClose={()=>{setActiveEntry(null);setEditData({});}}
+              onEdit={()=>{
+                setEditData({...activeEntry.data});
+                setEditCat(activeEntry.data.category||"password");
+                setActiveEntry({mode:"edit",data:activeEntry.data});
+              }}
+              onDelete={()=>setDelConfirm(activeEntry.data.id)}
+              onCopy={copy}
+            />
+          )}
+        </div>
+      )}
 
-      {showDeleteConfirm&&(
+      {/* Delete modal */}
+      {delConfirm&&(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999,padding:20}}>
-          <div style={{background:"#0F172A",border:"1px solid rgba(239,68,68,0.3)",borderRadius:16,padding:"28px 32px",maxWidth:360,width:"100%"}}>
-            <h3 style={{margin:"0 0 12px",color:"#FCA5A5",fontSize:16}}>¿Eliminar entrada?</h3>
-            <p style={{margin:"0 0 24px",color:"#64748B",fontSize:13}}>Esta acción no se puede deshacer.</p>
-            <div style={{display:"flex",gap:10}}>
-              <button onClick={()=>setShowDeleteConfirm(null)} style={btnStyle("#1E293B","#94A3B8")}>Cancelar</button>
-              <button onClick={()=>handleDelete(showDeleteConfirm)} style={btnStyle("rgba(239,68,68,0.15)","#EF4444","rgba(239,68,68,0.3)",true)}>Eliminar</button>
+          <div style={{background:"#0F172A",border:"1px solid rgba(239,68,68,0.3)",borderRadius:16,padding:"24px 28px",maxWidth:340,width:"100%"}}>
+            <h3 style={{margin:"0 0 10px",color:"#FCA5A5",fontSize:15}}>¿Eliminar entrada?</h3>
+            <p style={{margin:"0 0 20px",color:"#64748B",fontSize:12}}>Esta acción no se puede deshacer.</p>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>setDelConfirm(null)} style={btnSecondary}>Cancelar</button>
+              <button onClick={()=>handleDelete(delConfirm)} style={{...btnSecondary,flex:1,background:"rgba(239,68,68,0.15)",borderColor:"rgba(239,68,68,0.3)",color:"#EF4444"}}>Eliminar</button>
             </div>
           </div>
         </div>
       )}
 
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap');
-        *{box-sizing:border-box;}
-        ::-webkit-scrollbar{width:4px;}
-        ::-webkit-scrollbar-track{background:transparent;}
-        ::-webkit-scrollbar-thumb{background:rgba(96,165,250,0.2);border-radius:99px;}
-        input::placeholder,textarea::placeholder{color:#334155;}
-        input:focus,textarea:focus{border-color:rgba(96,165,250,0.4)!important;outline:none!important;}
-        @keyframes fadeIn{from{opacity:0;transform:translateX(-50%) translateY(-8px);}to{opacity:1;transform:translateX(-50%) translateY(0);}}
-      `}</style>
+      <style>{globalCSS}</style>
     </div>
   );
 }
 
-// ─── SUB-COMPONENTS ────────────────────────────────────────────────────
+// ─── DETAIL PANEL ──────────────────────────────────────────────────────────
+function DetailPanel({mode,data,editData,setEditData,editCat,setEditCat,revealed,setRevealed,onSave,onClose,onEdit,onDelete,onCopy}) {
+  const isView = mode==="view";
+  const isEdit = !isView;
+  // FIX: en vista usa la categoría del dato; en edición usa editCat
+  const cat    = getCat(isView ? (data?.category||"password") : editCat);
+  const fields = FIELDS[cat.id]||FIELDS.password;
 
-function PasswordField({label,value,onChange,show,onToggle,onKeyDown,autoFocus}) {
   return (
-    <div>
-      <label style={labelStyle}>{label}</label>
-      <div style={{position:"relative"}}>
-        <input type={show?"text":"password"} value={value} onChange={e=>onChange(e.target.value)} onKeyDown={onKeyDown} autoFocus={autoFocus}
-          style={{width:"100%",padding:"12px 44px 12px 14px",background:"rgba(15,23,42,0.8)",border:"1px solid rgba(96,165,250,0.15)",borderRadius:10,color:"#E2E8F0",fontSize:14,fontFamily:"inherit"}}/>
-        <button onClick={onToggle} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:"#475569",padding:0}}>
-          <Icon d={show?icons.eyeOff:icons.eye} size={18}/>
+    <div style={{
+      // FIX: en móvil ocupa toda la pantalla como overlay; en desktop panel lateral
+      position:"fixed", inset:0, zIndex:180,
+      background:"rgba(10,14,22,0.99)",
+      display:"flex", flexDirection:"column",
+      overflowY:"auto",
+      // En desktop sería lateral — por ahora full-screen en todos para simplicidad móvil
+    }}>
+      {/* Panel header */}
+      <div style={{display:"flex",alignItems:"center",gap:10,padding:"14px 16px",borderBottom:"1px solid rgba(96,165,250,0.1)",position:"sticky",top:0,background:"rgba(10,14,22,0.99)",zIndex:10,flexShrink:0}}>
+        <button onClick={onClose} style={btnIcon}>
+          <Icon d={IC.chevronL} size={18} stroke="#64748B"/>
         </button>
-      </div>
-    </div>
-  );
-}
-
-function SidebarItem({label,count,active,onClick,color,icon}) {
-  return (
-    <button onClick={onClick} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 16px",margin:"0 8px",background:active?"rgba(96,165,250,0.1)":"transparent",border:active?"1px solid rgba(96,165,250,0.15)":"1px solid transparent",borderRadius:8,cursor:"pointer",textAlign:"left",width:"calc(100% - 16px)",transition:"all 0.15s"}}>
-      {icon&&<Icon d={icon} size={14} stroke={color||"#64748B"}/>}
-      <span style={{flex:1,fontSize:12,color:active?"#E2E8F0":"#64748B",fontFamily:"inherit"}}>{label}</span>
-      {count>0&&<span style={{fontSize:10,padding:"1px 6px",background:active?"rgba(96,165,250,0.2)":"rgba(96,165,250,0.05)",borderRadius:99,color:active?"#93C5FD":"#475569"}}>{count}</span>}
-    </button>
-  );
-}
-
-function EntryPanel({mode,data,editData,setEditData,selectedCat,setSelectedCat,revealFields,setRevealFields,onSave,onClose,onEdit,onDelete,onCopy,getCatConfig}) {
-  const isView   = mode==="view";
-  const isEdit   = mode==="edit"||mode==="new";
-  const currentCat = isEdit?selectedCat:data?.category||"password";
-  const fields   = FIELD_TEMPLATES[currentCat]||FIELD_TEMPLATES.password;
-  const cat      = getCatConfig(currentCat);
-
-  return (
-    <div style={{width:340,flexShrink:0,background:"rgba(10,14,22,0.98)",borderLeft:"1px solid rgba(96,165,250,0.1)",display:"flex",flexDirection:"column",overflow:"hidden"}}>
-      <div style={{padding:"16px 20px",borderBottom:"1px solid rgba(96,165,250,0.08)",display:"flex",alignItems:"center",gap:10}}>
-        <div style={{width:32,height:32,borderRadius:8,background:`${cat.color}15`,border:`1px solid ${cat.color}30`,display:"flex",alignItems:"center",justifyContent:"center"}}>
-          <Icon d={icons[cat.icon]} size={16} stroke={cat.color}/>
+        <div style={{width:30,height:30,borderRadius:8,background:`${cat.color}15`,border:`1px solid ${cat.color}30`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+          <Icon d={IC[cat.icon]} size={15} stroke={cat.color}/>
         </div>
-        <span style={{flex:1,fontSize:13,color:"#94A3B8",fontWeight:600}}>
-          {isEdit?(mode==="new"?"Nueva entrada":"Editar"):"Detalle"}
+        <span style={{flex:1,fontSize:13,color:"#94A3B8",fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+          {isEdit?(mode==="new"?"Nueva entrada":"Editar entrada"):(data?.title||"Detalle")}
         </span>
-        <div style={{display:"flex",gap:6}}>
-          {isView&&(<><SmallBtn icon={icons.edit} onClick={onEdit}/><SmallBtn icon={icons.trash} onClick={onDelete} danger/></>)}
-          <SmallBtn icon={icons.x} onClick={onClose}/>
-        </div>
+        {isView&&(
+          <div style={{display:"flex",gap:6}}>
+            <SmBtn icon={IC.edit} onClick={onEdit}/>
+            <SmBtn icon={IC.trash} onClick={onDelete} danger/>
+          </div>
+        )}
       </div>
 
-      <div style={{flex:1,overflowY:"auto",padding:"20px"}}>
+      <div style={{flex:1,padding:"16px",display:"flex",flexDirection:"column",gap:14,maxWidth:600,width:"100%",margin:"0 auto",boxSizing:"border-box"}}>
+
+        {/* FIX: selector de categoría en nueva entrada */}
         {isEdit&&mode==="new"&&(
-          <div style={{marginBottom:20}}>
-            <label style={labelStyle}>Categoría</label>
+          <div>
+            <label style={lbl}>Categoría</label>
             <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
               {CATEGORIES.map(c=>(
-                <button key={c.id} onClick={()=>setSelectedCat(c.id)} style={{padding:"5px 10px",borderRadius:6,fontSize:11,background:selectedCat===c.id?`${c.color}20`:"rgba(15,23,42,0.6)",border:`1px solid ${selectedCat===c.id?c.color+"40":"rgba(96,165,250,0.1)"}`,color:selectedCat===c.id?c.color:"#475569",cursor:"pointer",fontFamily:"inherit"}}>{c.label}</button>
+                <button key={c.id} onClick={()=>setEditCat(c.id)} style={{
+                  padding:"6px 12px",borderRadius:8,fontSize:12,
+                  background:editCat===c.id?`${c.color}20`:"rgba(15,23,42,0.6)",
+                  border:`1px solid ${editCat===c.id?c.color+"50":"rgba(96,165,250,0.1)"}`,
+                  color:editCat===c.id?c.color:"#64748B",
+                  cursor:"pointer",fontFamily:"inherit",
+                  display:"flex",alignItems:"center",gap:5,
+                }}>
+                  <Icon d={IC[c.icon]} size={12} stroke={editCat===c.id?c.color:"#64748B"}/>
+                  {c.label}
+                </button>
               ))}
             </div>
           </div>
         )}
 
-        <div style={{marginBottom:16}}>
-          <label style={labelStyle}>Título</label>
-          {isView?<p style={valueStyle}>{data.title}</p>
-            :<input value={editData.title||""} onChange={e=>setEditData(p=>({...p,title:e.target.value}))} placeholder="Nombre de la entrada" style={inputStyle}/>}
+        {/* Título */}
+        <div>
+          <label style={lbl}>Título</label>
+          {isView
+            ?<p style={val}>{data?.title}</p>
+            :<input value={editData.title||""} onChange={e=>setEditData(p=>({...p,title:e.target.value}))}
+               placeholder="Nombre de la entrada" style={inp} autoFocus/>}
         </div>
 
+        {/* FIX: campos específicos por categoría */}
         {fields.map(f=>{
-          const val=isView?data[f.key]:editData[f.key];
-          if(isView&&!val) return null;
-          const isSecret=f.type==="password";
-          const revealed=revealFields[f.key];
+          const v = isView ? data?.[f.key] : editData[f.key];
+          if(isView&&!v) return null;
+          const secret = f.type==="password";
+          const shown  = revealed[f.key];
           return (
-            <div key={f.key} style={{marginBottom:16}}>
-              <label style={labelStyle}>{f.label}</label>
+            <div key={f.key}>
+              <label style={lbl}>{f.label}</label>
               {isView?(
                 <div style={{display:"flex",alignItems:"flex-start",gap:8}}>
-                  <div style={{flex:1,padding:"8px 10px",background:"rgba(15,23,42,0.6)",border:"1px solid rgba(96,165,250,0.08)",borderRadius:8,fontSize:12,color:"#94A3B8",wordBreak:"break-all",fontFamily:"inherit"}}>
-                    {isSecret&&!revealed?"•".repeat(Math.min((val||"").length,16)):(val||"—")}
+                  <div style={{flex:1,padding:"9px 11px",background:"rgba(15,23,42,0.6)",border:"1px solid rgba(96,165,250,0.08)",borderRadius:9,fontSize:13,color:"#94A3B8",wordBreak:"break-all",fontFamily:"inherit",lineHeight:1.5}}>
+                    {secret&&!shown?"•".repeat(Math.min((v||"").length,16)):(v||"—")}
                   </div>
-                  <div style={{display:"flex",flexDirection:"column",gap:4}}>
-                    {isSecret&&<SmallBtn icon={revealed?icons.eyeOff:icons.eye} onClick={()=>setRevealFields(p=>({...p,[f.key]:!p[f.key]}))}/>}
-                    {val&&<SmallBtn icon={icons.copy} onClick={()=>onCopy(val)}/>}
+                  <div style={{display:"flex",flexDirection:"column",gap:5,flexShrink:0}}>
+                    {secret&&<SmBtn icon={shown?IC.eyeOff:IC.eye} onClick={()=>setRevealed(p=>({...p,[f.key]:!p[f.key]}))}/>}
+                    {v&&<SmBtn icon={IC.copy} onClick={()=>onCopy(v)}/>}
                   </div>
                 </div>
               ):(
                 <div>
                   {f.type==="textarea"
-                    ?<textarea value={editData[f.key]||""} onChange={e=>setEditData(p=>({...p,[f.key]:e.target.value}))} placeholder={f.label} rows={3} style={{...inputStyle,resize:"vertical",minHeight:72}}/>
+                    ?<textarea value={editData[f.key]||""} onChange={e=>setEditData(p=>({...p,[f.key]:e.target.value}))}
+                       placeholder={f.placeholder} rows={3}
+                       style={{...inp,resize:"vertical",minHeight:72}}/>
                     :(
                       <div style={{display:"flex",gap:6}}>
-                        <input type={isSecret&&!revealFields[f.key]?"password":"text"} value={editData[f.key]||""} onChange={e=>setEditData(p=>({...p,[f.key]:e.target.value}))} placeholder={f.label} style={{...inputStyle,flex:1}}/>
-                        {isSecret&&(
+                        <input type={secret&&!revealed[f.key]?"password":"text"}
+                          value={editData[f.key]||""}
+                          onChange={e=>setEditData(p=>({...p,[f.key]:e.target.value}))}
+                          placeholder={f.placeholder}
+                          style={{...inp,flex:1}}/>
+                        {secret&&(
                           <>
-                            <SmallBtn icon={revealFields[f.key]?icons.eyeOff:icons.eye} onClick={()=>setRevealFields(p=>({...p,[f.key]:!p[f.key]}))}/>
-                            <SmallBtn icon={icons.refresh} title="Generar contraseña" onClick={()=>setEditData(p=>({...p,[f.key]:generatePassword()}))}/>
+                            <SmBtn icon={revealed[f.key]?IC.eyeOff:IC.eye} onClick={()=>setRevealed(p=>({...p,[f.key]:!p[f.key]}))}/>
+                            <SmBtn icon={IC.refresh} title="Generar" onClick={()=>setEditData(p=>({...p,[f.key]:genPassword()}))}/>
                           </>
                         )}
                       </div>
                     )}
-                  {isSecret&&editData[f.key]&&(()=>{
-                    const s=passwordStrength(editData[f.key]);
+                  {secret&&editData[f.key]&&(()=>{
+                    const s=pwStrength(editData[f.key]);
                     return(
-                      <div style={{display:"flex",alignItems:"center",gap:6,marginTop:4}}>
+                      <div style={{display:"flex",alignItems:"center",gap:6,marginTop:5}}>
                         <div style={{flex:1,height:2,background:"#1E293B",borderRadius:99,overflow:"hidden"}}>
                           <div style={{height:"100%",width:`${(s.score/5)*100}%`,background:s.color,borderRadius:99}}/>
                         </div>
-                        <span style={{fontSize:10,color:s.color}}>{s.label}</span>
+                        <span style={{fontSize:10,color:s.color,whiteSpace:"nowrap"}}>{s.label}</span>
                       </div>
                     );
                   })()}
@@ -706,21 +825,27 @@ function EntryPanel({mode,data,editData,setEditData,selectedCat,setSelectedCat,r
           );
         })}
 
-        {isView&&(
-          <div style={{marginTop:24,paddingTop:16,borderTop:"1px solid rgba(96,165,250,0.08)"}}>
+        {/* Metadata */}
+        {isView&&data?.createdAt&&(
+          <div style={{paddingTop:14,borderTop:"1px solid rgba(96,165,250,0.08)"}}>
             <div style={{fontSize:10,color:"#334155",lineHeight:2}}>
               <div>Creado: {new Date(data.createdAt).toLocaleString("es-ES")}</div>
               <div>Modificado: {new Date(data.updatedAt).toLocaleString("es-ES")}</div>
+              <div style={{marginTop:4,padding:"4px 8px",background:`${getCat(data.category).color}10`,border:`1px solid ${getCat(data.category).color}30`,borderRadius:6,display:"inline-flex",alignItems:"center",gap:5}}>
+                <Icon d={IC[getCat(data.category).icon]} size={11} stroke={getCat(data.category).color}/>
+                <span style={{color:getCat(data.category).color,fontSize:10}}>{getCat(data.category).label}</span>
+              </div>
             </div>
           </div>
         )}
       </div>
 
+      {/* Save bar */}
       {isEdit&&(
-        <div style={{padding:"16px 20px",borderTop:"1px solid rgba(96,165,250,0.08)"}}>
-          <div style={{display:"flex",gap:8}}>
-            <button onClick={onClose} style={btnStyle("#1E293B","#94A3B8")}>Cancelar</button>
-            <button onClick={onSave} style={btnStyle("linear-gradient(135deg,#1D4ED8,#1E40AF)","#E2E8F0","rgba(96,165,250,0.3)",true)}>Guardar</button>
+        <div style={{padding:"12px 16px",borderTop:"1px solid rgba(96,165,250,0.08)",background:"rgba(10,14,22,0.99)",position:"sticky",bottom:0,flexShrink:0}}>
+          <div style={{display:"flex",gap:8,maxWidth:600,margin:"0 auto"}}>
+            <button onClick={onClose} style={btnSecondary}>Cancelar</button>
+            <button onClick={onSave} style={{...btnSecondary,flex:1,background:"linear-gradient(135deg,#1D4ED8,#1E40AF)",borderColor:"rgba(96,165,250,0.3)",color:"#E2E8F0"}}>Guardar</button>
           </div>
         </div>
       )}
@@ -728,17 +853,89 @@ function EntryPanel({mode,data,editData,setEditData,selectedCat,setSelectedCat,r
   );
 }
 
-function SmallBtn({icon,onClick,danger,title}) {
+// ─── SMALL COMPONENTS ──────────────────────────────────────────────────────
+function PwField({label,value,onChange,show,onToggle,onKeyDown,autoFocus}) {
   return (
-    <button onClick={onClick} title={title} style={{padding:6,background:"rgba(15,23,42,0.8)",border:`1px solid ${danger?"rgba(239,68,68,0.2)":"rgba(96,165,250,0.1)"}`,borderRadius:6,cursor:"pointer",color:danger?"#EF4444":"#475569",display:"flex",alignItems:"center",flexShrink:0}}>
+    <div style={{width:"100%"}}>
+      <label style={lbl}>{label}</label>
+      {/* FIX: width:100% + boxSizing para que no se salga */}
+      <div style={{position:"relative",width:"100%"}}>
+        <input type={show?"text":"password"} value={value}
+          onChange={e=>onChange(e.target.value)}
+          onKeyDown={onKeyDown} autoFocus={autoFocus}
+          style={{
+            width:"100%", boxSizing:"border-box",
+            padding:"12px 44px 12px 14px",
+            background:"rgba(15,23,42,0.8)",
+            border:"1px solid rgba(96,165,250,0.15)",
+            borderRadius:10, color:"#E2E8F0",
+            fontSize:16, // 16px evita zoom automático en iOS
+            fontFamily:"inherit",
+          }}/>
+        <button onClick={onToggle} type="button" style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:"#475569",padding:4,touchAction:"manipulation"}}>
+          <Icon d={show?IC.eyeOff:IC.eye} size={18}/>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Toast({msg,type}) {
+  const bg = type==="error"?"rgba(239,68,68,0.95)":type==="info"?"rgba(59,130,246,0.95)":"rgba(16,185,129,0.95)";
+  return (
+    <div style={{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",background:bg,color:"#fff",padding:"10px 18px",borderRadius:10,fontSize:13,zIndex:9999,boxShadow:"0 4px 20px rgba(0,0,0,0.4)",fontFamily:"'DM Mono',monospace",whiteSpace:"nowrap",maxWidth:"90vw",overflow:"hidden",textOverflow:"ellipsis",animation:"fadeIn 0.2s ease"}}>
+      {msg}
+    </div>
+  );
+}
+
+function SideItem({label,count,active,onClick,color,icon}) {
+  return (
+    <button onClick={onClick} style={{display:"flex",alignItems:"center",gap:9,padding:"8px 14px",margin:"0 8px",background:active?"rgba(96,165,250,0.1)":"transparent",border:active?"1px solid rgba(96,165,250,0.15)":"1px solid transparent",borderRadius:8,cursor:"pointer",textAlign:"left",width:"calc(100% - 16px)",transition:"all 0.15s",fontFamily:"inherit"}}>
+      {icon&&<Icon d={icon} size={13} stroke={color||"#64748B"}/>}
+      <span style={{flex:1,fontSize:12,color:active?"#E2E8F0":"#64748B"}}>{label}</span>
+      {count>0&&<span style={{fontSize:10,padding:"1px 5px",background:active?"rgba(96,165,250,0.2)":"rgba(96,165,250,0.05)",borderRadius:99,color:active?"#93C5FD":"#475569"}}>{count}</span>}
+    </button>
+  );
+}
+
+function SmBtn({icon,onClick,danger,title}) {
+  return (
+    <button onClick={onClick} title={title} style={{padding:7,background:"rgba(15,23,42,0.8)",border:`1px solid ${danger?"rgba(239,68,68,0.2)":"rgba(96,165,250,0.1)"}`,borderRadius:7,cursor:"pointer",color:danger?"#EF4444":"#475569",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,touchAction:"manipulation"}}>
       <Icon d={icon} size={14}/>
     </button>
   );
 }
 
-const labelStyle = {display:"block",fontSize:10,color:"#475569",marginBottom:5,letterSpacing:"1px",textTransform:"uppercase"};
-const valueStyle = {margin:0,fontSize:13,color:"#94A3B8",wordBreak:"break-all",fontFamily:"inherit"};
-const inputStyle = {width:"100%",padding:"9px 12px",background:"rgba(15,23,42,0.8)",border:"1px solid rgba(96,165,250,0.15)",borderRadius:8,color:"#E2E8F0",fontSize:12,fontFamily:"inherit",boxSizing:"border-box"};
-function btnStyle(bg,color,border,flex) {
-  return {flex:flex?1:undefined,padding:"10px 16px",background:bg,border:`1px solid ${border||"transparent"}`,borderRadius:8,color,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600,letterSpacing:"0.5px"};
-}
+// ─── SHARED STYLES ─────────────────────────────────────────────────────────
+const lbl = {display:"block",fontSize:10,color:"#475569",marginBottom:5,letterSpacing:"1px",textTransform:"uppercase"};
+const val = {margin:0,fontSize:13,color:"#94A3B8",wordBreak:"break-all",fontFamily:"inherit",lineHeight:1.5};
+const inp = {width:"100%",padding:"10px 12px",background:"rgba(15,23,42,0.8)",border:"1px solid rgba(96,165,250,0.15)",borderRadius:9,color:"#E2E8F0",fontSize:14,fontFamily:"inherit",boxSizing:"border-box",outline:"none"};
+const btnIcon = {padding:7,background:"rgba(15,23,42,0.8)",border:"1px solid rgba(96,165,250,0.1)",borderRadius:8,cursor:"pointer",color:"#64748B",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,touchAction:"manipulation"};
+const btnSecondary = {padding:"11px 16px",background:"#1E293B",border:"1px solid rgba(96,165,250,0.1)",borderRadius:9,color:"#94A3B8",fontSize:13,cursor:"pointer",fontFamily:"inherit",fontWeight:600};
+
+const globalCSS = `
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap');
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow-x: hidden; }
+  body { background: #0A0D14; }
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(96,165,250,0.2); border-radius: 99px; }
+  input, textarea, button { font-family: inherit; }
+  input::placeholder, textarea::placeholder { color: #334155; }
+  input:focus, textarea:focus { border-color: rgba(96,165,250,0.4) !important; outline: none !important; }
+  textarea { resize: vertical; }
+  @keyframes fadeIn {
+    from { opacity:0; transform:translateX(-50%) translateY(-6px); }
+    to   { opacity:1; transform:translateX(-50%) translateY(0); }
+  }
+  /* Sidebar visible en pantallas grandes */
+  @media(min-width: 640px) {
+    aside { position: static !important; left: auto !important; }
+  }
+  /* Tab labels visibles en pantallas medianas */
+  @media(min-width: 480px) {
+    .tab-label { display: inline !important; }
+  }
+`;
