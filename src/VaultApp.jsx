@@ -406,14 +406,16 @@ export default function VaultApp() {
       <div style={css.grid}/>
       {toast&&<Toast msg={toast.msg} type={toast.type}/>}
 
-      {/* ── HEADER */}
+      {/* ── HEADER — safe-area para Dynamic Island / notch iOS */}
       <header style={{
         display:"flex",alignItems:"center",gap:10,
-        padding:"12px 16px",
+        paddingTop:"max(12px, calc(12px + env(safe-area-inset-top)))",
+        paddingBottom:"12px",
+        paddingLeft:"max(16px, env(safe-area-inset-left))",
+        paddingRight:"max(16px, env(safe-area-inset-right))",
         background:"rgba(10,13,20,0.97)",
         borderBottom:"1px solid rgba(96,165,250,0.1)",
         position:"sticky",top:0,zIndex:200,
-        // FIX: no overflow
         boxSizing:"border-box",width:"100%",
       }}>
         {/* Hamburger en móvil */}
@@ -457,7 +459,7 @@ export default function VaultApp() {
 
       {/* ── BACKUP PANEL */}
       {panel==="backup"&&(
-        <div style={{padding:"20px 16px",maxWidth:680,margin:"0 auto",boxSizing:"border-box",width:"100%"}}>
+        <div style={{padding:"20px 16px",paddingBottom:"calc(20px + 60px + env(safe-area-inset-bottom))",maxWidth:680,margin:"0 auto",boxSizing:"border-box",width:"100%"}}>
           <h2 style={{margin:"0 0 6px",fontSize:17,color:"#F1F5F9",fontWeight:700}}>Copias de seguridad</h2>
           <p style={{margin:"0 0 20px",fontSize:12,color:"#475569",lineHeight:1.6}}>
             El archivo <code style={{color:"#60A5FA",fontSize:11}}>.vault</code> está cifrado con AES-256-GCM. Solo accesible con tu contraseña maestra.
@@ -560,7 +562,7 @@ export default function VaultApp() {
 
       {/* ── VAULT PANEL */}
       {panel==="vault"&&(
-        <div style={{display:"flex",height:"calc(100dvh - 53px)",overflow:"hidden",position:"relative"}}>
+        <div style={{display:"flex",height:"calc(100dvh - 53px - 60px - env(safe-area-inset-bottom))",overflow:"hidden",position:"relative"}}>
 
           {/* Sidebar overlay en móvil */}
           {sidebarOpen&&(
@@ -578,7 +580,7 @@ export default function VaultApp() {
             // FIX: en móvil es drawer lateral
             position: "fixed",
             left: sidebarOpen ? 0 : -220,
-            top: 53,
+            top: 'calc(53px + env(safe-area-inset-top))',
             bottom: 0,
             zIndex: 160,
             transition:"left 0.25s ease",
@@ -680,6 +682,75 @@ export default function VaultApp() {
         </div>
       )}
 
+      {/* ── BOTTOM TAB BAR — siempre visible, nunca tapado */}
+      <nav style={{
+        position:'fixed', bottom:0, left:0, right:0,
+        paddingBottom:'max(8px, env(safe-area-inset-bottom))',
+        paddingTop:'10px',
+        paddingLeft:'max(16px, env(safe-area-inset-left))',
+        paddingRight:'max(16px, env(safe-area-inset-right))',
+        background:'rgba(10,13,20,0.98)',
+        borderTop:'1px solid rgba(96,165,250,0.1)',
+        display:'flex', alignItems:'center', justifyContent:'space-around',
+        zIndex:300,
+        backdropFilter:'blur(12px)',
+      }}>
+        {/* Inicio / Bóveda */}
+        <button onClick={()=>{setPanel('vault');setActiveEntry(null);setSidebarOpen(false);}} style={{
+          display:'flex',flexDirection:'column',alignItems:'center',gap:3,
+          padding:'6px 16px', borderRadius:10,
+          background:panel==='vault'&&!activeEntry?'rgba(96,165,250,0.1)':'transparent',
+          border:'1px solid '+(panel==='vault'&&!activeEntry?'rgba(96,165,250,0.2)':'transparent'),
+          cursor:'pointer', color:panel==='vault'&&!activeEntry?'#93C5FD':'#475569',
+          fontFamily:'inherit',
+        }}>
+          <Icon d={IC.shield} size={20} stroke={panel==='vault'&&!activeEntry?'#93C5FD':'#475569'}/>
+          <span style={{fontSize:9,letterSpacing:'0.5px'}}>BÓVEDA</span>
+        </button>
+
+        {/* Nueva entrada — botón central destacado */}
+        <button onClick={()=>{setEditCat('password');setEditData({title:''});setActiveEntry({mode:'new',data:{}});setPanel('vault');}} style={{
+          display:'flex',flexDirection:'column',alignItems:'center',gap:3,
+          padding:'6px 16px', borderRadius:10,
+          background:'linear-gradient(135deg,#1D4ED8,#1E40AF)',
+          border:'1px solid rgba(96,165,250,0.3)',
+          cursor:'pointer', color:'#E2E8F0',
+          fontFamily:'inherit',
+          boxShadow:'0 0 16px rgba(29,78,216,0.4)',
+        }}>
+          <Icon d={IC.plus} size={20} stroke='#E2E8F0'/>
+          <span style={{fontSize:9,letterSpacing:'0.5px'}}>AÑADIR</span>
+        </button>
+
+        {/* Backup */}
+        <button onClick={()=>{setPanel('backup');setActiveEntry(null);}} style={{
+          display:'flex',flexDirection:'column',alignItems:'center',gap:3,
+          padding:'6px 16px', borderRadius:10,
+          background:panel==='backup'?'rgba(96,165,250,0.1)':'transparent',
+          border:'1px solid '+(panel==='backup'?'rgba(96,165,250,0.2)':'transparent'),
+          cursor:'pointer', color:panel==='backup'?'#93C5FD':'#475569',
+          fontFamily:'inherit',
+          position:'relative',
+        }}>
+          <Icon d={IC.backup} size={20} stroke={panel==='backup'?'#93C5FD':'#475569'}/>
+          <span style={{fontSize:9,letterSpacing:'0.5px'}}>BACKUP</span>
+          {bkWarn&&<span style={{position:'absolute',top:4,right:12,width:7,height:7,borderRadius:'50%',background:'#F59E0B',boxShadow:'0 0 5px rgba(245,158,11,0.7)'}}/>}
+        </button>
+
+        {/* Bloquear */}
+        <button onClick={()=>{setPhase('unlock');setEntries([]);setMasterPw('');}} style={{
+          display:'flex',flexDirection:'column',alignItems:'center',gap:3,
+          padding:'6px 16px', borderRadius:10,
+          background:'transparent',
+          border:'1px solid transparent',
+          cursor:'pointer', color:'#EF4444',
+          fontFamily:'inherit',
+        }}>
+          <Icon d={IC.lock} size={20} stroke='#EF4444'/>
+          <span style={{fontSize:9,letterSpacing:'0.5px'}}>CERRAR</span>
+        </button>
+      </nav>
+
       {/* Delete modal */}
       {delConfirm&&(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999,padding:20}}>
@@ -717,7 +788,7 @@ function DetailPanel({mode,data,editData,setEditData,editCat,setEditCat,revealed
       // En desktop sería lateral — por ahora full-screen en todos para simplicidad móvil
     }}>
       {/* Panel header */}
-      <div style={{display:"flex",alignItems:"center",gap:10,padding:"14px 16px",borderBottom:"1px solid rgba(96,165,250,0.1)",position:"sticky",top:0,background:"rgba(10,14,22,0.99)",zIndex:10,flexShrink:0}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,paddingTop:"max(14px, calc(14px + env(safe-area-inset-top)))",paddingBottom:"14px",paddingLeft:"16px",paddingRight:"16px",borderBottom:"1px solid rgba(96,165,250,0.1)",position:"sticky",top:0,background:"rgba(10,14,22,0.99)",zIndex:10,flexShrink:0}}>
         <button onClick={onClose} style={btnIcon}>
           <Icon d={IC.chevronL} size={18} stroke="#64748B"/>
         </button>
@@ -735,7 +806,7 @@ function DetailPanel({mode,data,editData,setEditData,editCat,setEditCat,revealed
         )}
       </div>
 
-      <div style={{flex:1,padding:"16px",display:"flex",flexDirection:"column",gap:14,maxWidth:600,width:"100%",margin:"0 auto",boxSizing:"border-box"}}>
+      <div style={{flex:1,padding:"16px",paddingBottom:"calc(16px + 60px + env(safe-area-inset-bottom))",display:"flex",flexDirection:"column",gap:14,maxWidth:600,width:"100%",margin:"0 auto",boxSizing:"border-box"}}>
 
         {/* FIX: selector de categoría en nueva entrada */}
         {isEdit&&mode==="new"&&(
@@ -842,7 +913,7 @@ function DetailPanel({mode,data,editData,setEditData,editCat,setEditCat,revealed
 
       {/* Save bar */}
       {isEdit&&(
-        <div style={{padding:"12px 16px",borderTop:"1px solid rgba(96,165,250,0.08)",background:"rgba(10,14,22,0.99)",position:"sticky",bottom:0,flexShrink:0}}>
+        <div style={{padding:"12px 16px",paddingBottom:"calc(12px + env(safe-area-inset-bottom))",borderTop:"1px solid rgba(96,165,250,0.08)",background:"rgba(10,14,22,0.99)",position:"sticky",bottom:0,flexShrink:0}}>
           <div style={{display:"flex",gap:8,maxWidth:600,margin:"0 auto"}}>
             <button onClick={onClose} style={btnSecondary}>Cancelar</button>
             <button onClick={onSave} style={{...btnSecondary,flex:1,background:"linear-gradient(135deg,#1D4ED8,#1E40AF)",borderColor:"rgba(96,165,250,0.3)",color:"#E2E8F0"}}>Guardar</button>
@@ -917,7 +988,13 @@ const btnSecondary = {padding:"11px 16px",background:"#1E293B",border:"1px solid
 const globalCSS = `
   @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap');
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; overflow-x: hidden; }
+  html, body {
+    height: 100%;
+    overflow-x: hidden;
+    /* Respetar safe-area en todo el documento */
+    padding-top: env(safe-area-inset-top);
+    padding-top: 0; /* el header ya lo gestiona con max() */
+  }
   body { background: #0A0D14; }
   ::-webkit-scrollbar { width: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
