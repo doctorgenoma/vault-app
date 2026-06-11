@@ -49,6 +49,7 @@ const IC = {
   mail:     ['M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z', 'M22 6l-10 7L2 6'],
   settings: ['M12 15a3 3 0 100-6 3 3 0 000 6z', 'M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z'],
   logout:   ['M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4', 'M16 17l5-5-5-5', 'M21 12H9'],
+  table:    ['M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18'],
   faceId:   ['M8 2H6a2 2 0 00-2 2v2', 'M16 2h2a2 2 0 012 2v2', 'M8 22H6a2 2 0 01-2-2v-2', 'M16 22h2a2 2 0 002-2v-2', 'M9 10h.01', 'M15 10h.01', 'M9.5 15a3.5 3.5 0 005 0'],
   pin:      ['M12 2a10 10 0 100 20A10 10 0 0012 2z', 'M12 8v4', 'M12 16h.01'],
 }
@@ -437,6 +438,43 @@ export default function VaultApp() {
     addBackupEntry(entries.length)
     setBackupLog(loadBackupLog())
     notify(`📦 Backup de ${entries.length} entradas exportado`)
+  }
+
+  // ── EXPORT CSV
+  const handleExportCSV = () => {
+    if (!entries.length) return notify('No hay entradas para exportar', 'error')
+    const headers = [
+      'Titulo','Categoria','URL','Usuario','Contrasena',
+      'Num tarjeta','Titular','Vencimiento','CVV','PIN','Banco',
+      'SSID','Seguridad WiFi','Router','Contenido',
+      'Nombre completo','Num Documento','Fecha nacimiento',
+      'Nacionalidad','Direccion','Telefono','Email',
+      'Notas','Creado','Modificado'
+    ]
+    const esc = v => {
+      if (v == null || v === '') return ''
+      const s = String(v).replace(/"/g, '""')
+      return (s.includes(',') || s.includes('\n') || s.includes('"')) ? '"' + s + '"' : s
+    }
+    const CAT = { password:'Contrasena', card:'Tarjeta', wifi:'WiFi', note:'Nota', identity:'Identidad' }
+    const rows = entries.map(e => [
+      esc(e.title), esc(CAT[e.category]||e.category),
+      esc(e.url), esc(e.username), esc(e.password),
+      esc(e.cardNumber), esc(e.holder), esc(e.expiry), esc(e.cvv), esc(e.pin), esc(e.bank),
+      esc(e.ssid), esc(e.security), esc(e.router), esc(e.content),
+      esc(e.fullName), esc(e.idNumber), esc(e.dob), esc(e.nationality),
+      esc(e.address), esc(e.phone), esc(e.email), esc(e.notes),
+      esc(e.createdAt ? new Date(e.createdAt).toLocaleString('es-ES') : ''),
+      esc(e.updatedAt ? new Date(e.updatedAt).toLocaleString('es-ES') : ''),
+    ].join(','))
+    const csv = [headers.join(','), ...rows].join('\n')
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = 'vault-export-' + new Date().toISOString().slice(0,10) + '.csv'
+    a.click()
+    URL.revokeObjectURL(a.href)
+    notify('📊 CSV con ' + entries.length + ' entradas exportado')
   }
 
   // ── IMPORT BACKUP
@@ -948,10 +986,10 @@ export default function VaultApp() {
           </button>
 
           {/* Export / Import */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
             <BackupCard icon={IC.download} color="#60A5FA" title="Exportar" sub="Descarga .vault"
-              desc="Genera un archivo cifrado portable como copia de seguridad adicional."
-              btnLabel="Exportar ahora" onClick={handleExport} />
+              desc="Archivo cifrado AES-256. Solo tú puedes abrirlo con tu contraseña maestra."
+              btnLabel="Exportar .vault" onClick={handleExport} />
 
             <BackupCard icon={IC.upload} color="#34D399" title="Restaurar" sub="Carga .vault"
               desc="Restaura desde un archivo .vault. Reemplaza los datos actuales."
@@ -960,6 +998,32 @@ export default function VaultApp() {
           </div>
           <input id="vltImport" type="file" accept=".vault,.json,application/json,text/plain,*/*"
             onChange={handleImport} style={{ display: 'none' }} />
+
+          {/* CSV Export */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ padding: '16px 18px', borderRadius: 14, background: 'rgba(15,23,42,0.8)', border: '1px solid rgba(251,191,36,0.15)' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                <div style={{ width: 38, height: 38, borderRadius: 9, background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <Icon d={IC.table} size={17} stroke="#FBBF24" />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: '#E2E8F0' }}>Exportar como CSV</span>
+                    <span style={{ fontSize: 9, padding: '2px 6px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 4, color: '#EF4444', letterSpacing: '0.5px' }}>SIN CIFRAR</span>
+                  </div>
+                  <p style={{ margin: '0 0 12px', fontSize: 11, color: '#475569', lineHeight: 1.6 }}>
+                    Exporta todas las entradas en texto plano. Útil para migrar a otro gestor o abrir en Excel.
+                    <strong style={{ color: '#F59E0B' }}> Guárdalo en un lugar seguro o elimínalo tras usarlo.</strong>
+                  </p>
+                  <button onClick={handleExportCSV}
+                    style={{ padding: '9px 16px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 8, color: '#FBBF24', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <Icon d={IC.table} size={13} stroke="#FBBF24" />
+                    Descargar .csv
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
 
           {/* Historial */}
           {backupLog.length > 0 && (
