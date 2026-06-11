@@ -2,6 +2,11 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from './supabase.js'
 import { encryptVault, decryptVault, reEncryptVault, pwStrength, genPassword, PBKDF2_ITERATIONS } from './crypto.js'
 import { saveAndSync, loadLocal, loadBackupLog, addBackupEntry, clearLocal, resolveSync } from './storage.js'
+import {
+  getQuickMode, clearQuickUnlock,
+  setupPIN, unlockWithPIN, getPINLockSecsLeft,
+  checkBiometricSupport, setupBiometric, unlockWithBiometric,
+} from './biometric.js'
 
 // ─── ICONS ─────────────────────────────────────────────────────────────────
 const Icon = ({ d, size = 20, stroke = 'currentColor', fill = 'none', sw = 1.8 }) => (
@@ -44,6 +49,8 @@ const IC = {
   mail:     ['M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z', 'M22 6l-10 7L2 6'],
   settings: ['M12 15a3 3 0 100-6 3 3 0 000 6z', 'M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z'],
   logout:   ['M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4', 'M16 17l5-5-5-5', 'M21 12H9'],
+  faceId:   ['M8 2H6a2 2 0 00-2 2v2', 'M16 2h2a2 2 0 012 2v2', 'M8 22H6a2 2 0 01-2-2v-2', 'M16 22h2a2 2 0 002-2v-2', 'M9 10h.01', 'M15 10h.01', 'M9.5 15a3.5 3.5 0 005 0'],
+  pin:      ['M12 2a10 10 0 100 20A10 10 0 0012 2z', 'M12 8v4', 'M12 16h.01'],
 }
 
 // ─── CATEGORIES ────────────────────────────────────────────────────────────
@@ -141,10 +148,24 @@ export default function VaultApp() {
   const [newMPw2, setNewMPw2]       = useState('')
   const [showChangePw, setShowChangePw] = useState(false)
 
+  // ── Biometric / PIN state
+  const [quickMode, setQuickMode]       = useState('none')  // none|biometric|pin|setup
+  const [bioSupported, setBioSupported] = useState(false)
+  const [pinInput, setPinInput]         = useState('')
+  const [pinError, setPinError]         = useState('')
+  const [pinLockSecs, setPinLockSecs]   = useState(0)
+  const [setupMode, setSetupMode]       = useState(null)    // null|biometric|pin
+  const [setupPin, setSetupPin]         = useState('')
+  const [setupPin2, setSetupPin2]       = useState('')
+  const [setupStep, setSetupStep]       = useState(1)
+
   const autoLockRef = useRef(null)
 
-  // ── Boot: check session
+  // ── Boot: check session + biometric support
   useEffect(() => {
+    checkBiometricSupport().then(ok => setBioSupported(ok))
+    setQuickMode(getQuickMode())
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
         setAuthUser(session.user)
@@ -171,6 +192,8 @@ export default function VaultApp() {
       setAuthPhase('unlock')
       setEntries([])
       setMasterPw('')
+      setPinInput('')
+      setPinError('')
       notify('🔒 Bóveda bloqueada por inactividad', 'info')
     }, 5 * 60 * 1000)
   }, [])
@@ -229,33 +252,128 @@ export default function VaultApp() {
     if (!masterPw) return
     setLoading(true)
     try {
-      setSyncStatus('syncing')
-      // Resolver qué versión usar (local vs remota)
-      const { blob, source } = await resolveSync(masterPw, decryptVault)
-
-      if (!blob) {
-        // Bóveda nueva — crear vacía
-        const enc = await encryptVault([], masterPw)
-        await saveAndSync(enc)
-        setEntries([])
-        setAuthPhase('vault')
-        setSyncStatus('synced')
-        notify('✅ Bóveda creada')
-      } else {
-        const data = await decryptVault(blob, masterPw)
-        setEntries(data)
-        setAuthPhase('vault')
-        setBackupLog(loadBackupLog())
-        setSyncStatus(source.includes('remote') ? 'synced' : 'idle')
-        if (source === 'remote_newer') notify('☁️ Bóveda actualizada desde la nube')
-        else notify('✅ Bóveda desbloqueada')
-      }
+      await doUnlockVault(masterPw)
+      // Tras unlock exitoso con contraseña maestra, ofrecer setup biometría/PIN
+      if (quickMode === 'none') setSetupMode('offer')
     } catch {
       notify('Contraseña maestra incorrecta', 'error')
       setSyncStatus('error')
     }
     setLoading(false)
   }
+
+  // ── UNLOCK CON BIOMETRÍA
+  const handleBiometricUnlock = async () => {
+    setLoading(true)
+    setPinError('')
+    try {
+      const mPw = await unlockWithBiometric()
+      setMasterPw(mPw)
+      await doUnlockVault(mPw)
+    } catch (err) {
+      setPinError(err.message || 'Error de biometría')
+      // Si falla biometría, mostrar PIN como fallback si está disponible
+      if (quickMode === 'biometric' && getQuickMode() === 'biometric') {
+        notify('Biometría fallida — usa el PIN', 'info')
+      }
+    }
+    setLoading(false)
+  }
+
+  // ── UNLOCK CON PIN
+  const handlePINUnlock = async (pin) => {
+    setLoading(true)
+    setPinError('')
+    const lockSecs = getPINLockSecsLeft()
+    if (lockSecs > 0) {
+      setPinError(`PIN bloqueado. Espera ${lockSecs}s.`)
+      setPinLockSecs(lockSecs)
+      setLoading(false)
+      return
+    }
+    try {
+      const mPw = await unlockWithPIN(pin)
+      setMasterPw(mPw)
+      await doUnlockVault(mPw)
+      setPinInput('')
+    } catch (err) {
+      setPinError(err.message)
+      setPinInput('')
+    }
+    setLoading(false)
+  }
+
+  // ── LÓGICA COMÚN DE UNLOCK (usada por todos los métodos)
+  const doUnlockVault = async (mPw) => {
+    setSyncStatus('syncing')
+    const { blob, source } = await resolveSync(mPw, decryptVault)
+    if (!blob) {
+      const enc = await encryptVault([], mPw)
+      await saveAndSync(enc)
+      setEntries([])
+      setAuthPhase('vault')
+      setSyncStatus('synced')
+      notify('✅ Bóveda creada')
+    } else {
+      const data = await decryptVault(blob, mPw)
+      setEntries(data)
+      setAuthPhase('vault')
+      setBackupLog(loadBackupLog())
+      setSyncStatus(source.includes('remote') ? 'synced' : 'idle')
+      if (source === 'remote_newer') notify('☁️ Bóveda actualizada desde la nube')
+      else notify('✅ Bóveda desbloqueada')
+    }
+  }
+
+  // ── SETUP BIOMETRÍA tras unlock con contraseña maestra
+  const handleSetupBiometric = async () => {
+    setLoading(true)
+    try {
+      await setupBiometric(masterPw, authUser?.email)
+      setQuickMode('biometric')
+      setSetupMode(null)
+      notify('✅ Face ID / Touch ID activado')
+    } catch (err) {
+      notify('Error al activar biometría: ' + err.message, 'error')
+    }
+    setLoading(false)
+  }
+
+  // ── SETUP PIN tras unlock con contraseña maestra
+  const handleSetupPIN = async () => {
+    if (setupPin.length !== 6) return notify('El PIN debe tener 6 dígitos', 'error')
+    if (setupPin !== setupPin2) return notify('Los PINs no coinciden', 'error')
+    setLoading(true)
+    try {
+      await setupPIN(setupPin, masterPw)
+      setQuickMode('pin')
+      setSetupMode(null)
+      setSetupPin('')
+      setSetupPin2('')
+      notify('✅ PIN de 6 dígitos activado')
+    } catch (err) {
+      notify('Error al configurar PIN', 'error')
+    }
+    setLoading(false)
+  }
+
+  // ── DESACTIVAR desbloqueo rápido
+  const handleDisableQuickUnlock = () => {
+    clearQuickUnlock()
+    setQuickMode('none')
+    notify('Desbloqueo rápido desactivado')
+  }
+
+  // ── COUNTDOWN PIN lock
+  useEffect(() => {
+    if (pinLockSecs <= 0) return
+    const t = setInterval(() => {
+      const secs = getPINLockSecsLeft()
+      setPinLockSecs(secs)
+      if (secs <= 0) clearInterval(t)
+    }, 1000)
+    return () => clearInterval(t)
+  }, [pinLockSecs])
 
   // ── PERSIST: guardar localmente + sync
   const persist = useCallback(async (data) => {
@@ -502,48 +620,95 @@ export default function VaultApp() {
     )
   }
 
-  // ── UNLOCK (contraseña maestra)
+  // ── UNLOCK (contraseña maestra + biometría + PIN)
   if (authPhase === 'unlock') {
-    const str = pwStrength(masterPw)
+    const str      = pwStrength(masterPw)
+    const hasLocal = !!loadLocal()
+    const isPinLocked = getPINLockSecsLeft() > 0
+
     return (
       <div style={{ ...appStyle, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
         <div style={grid} />
-        <div style={{ position: 'relative', zIndex: 1, width: '100%', maxWidth: 420, background: 'rgba(15,20,30,0.97)', border: '1px solid rgba(96,165,250,0.15)', borderRadius: 20, padding: 'clamp(24px,5vw,40px) clamp(20px,5vw,36px)', boxShadow: '0 24px 48px rgba(0,0,0,0.5)', boxSizing: 'border-box' }}>
+        <div style={{ position: 'relative', zIndex: 1, width: '100%', maxWidth: 400, background: 'rgba(15,20,30,0.97)', border: '1px solid rgba(96,165,250,0.15)', borderRadius: 20, padding: 'clamp(20px,5vw,36px) clamp(18px,5vw,32px)', boxShadow: '0 24px 48px rgba(0,0,0,0.5)', boxSizing: 'border-box' }}>
 
-          <div style={{ textAlign: 'center', marginBottom: 28 }}>
-            <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 64, height: 64, borderRadius: 16, background: 'linear-gradient(135deg,#1E3A5F,#0F172A)', border: '1px solid rgba(96,165,250,0.3)', marginBottom: 14, boxShadow: '0 0 30px rgba(96,165,250,0.1)' }}>
-              <Icon d={IC.lock} size={28} stroke="#60A5FA" />
+          {/* Logo */}
+          <div style={{ textAlign: 'center', marginBottom: 24 }}>
+            <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 60, height: 60, borderRadius: 16, background: 'linear-gradient(135deg,#1E3A5F,#0F172A)', border: '1px solid rgba(96,165,250,0.3)', marginBottom: 12, boxShadow: '0 0 30px rgba(96,165,250,0.1)' }}>
+              <Icon d={IC.lock} size={26} stroke="#60A5FA" />
             </div>
-            <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#F1F5F9' }}>Bóveda bloqueada</h1>
-            <p style={{ margin: '6px 0 0', fontSize: 12, color: '#475569' }}>{authUser?.email}</p>
+            <h1 style={{ margin: 0, fontSize: 19, fontWeight: 700, color: '#F1F5F9' }}>Bóveda bloqueada</h1>
+            <p style={{ margin: '4px 0 0', fontSize: 11, color: '#475569' }}>{authUser?.email}</p>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div style={{ background: 'rgba(96,165,250,0.05)', border: '1px solid rgba(96,165,250,0.1)', borderRadius: 10, padding: '10px 14px', fontSize: 11, color: '#64748B', lineHeight: 1.7 }}>
-              🔐 AES-256-GCM · PBKDF2 · {PBKDF2_ITERATIONS.toLocaleString()} iteraciones<br />
-              Contraseña maestra <strong style={{ color: '#94A3B8' }}>nunca sale del dispositivo</strong>
+          {/* ── MODO BIOMETRÍA */}
+          {quickMode === 'biometric' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <button onClick={handleBiometricUnlock} disabled={loading}
+                style={{ width: '100%', padding: '16px', background: loading ? 'rgba(96,165,250,0.05)' : 'linear-gradient(135deg,#1D4ED8,#1E40AF)', border: '1px solid rgba(96,165,250,0.3)', borderRadius: 12, color: '#E2E8F0', fontSize: 14, fontWeight: 600, cursor: loading ? 'not-allowed' : 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
+                <Icon d={IC.faceId} size={22} stroke="#E2E8F0" />
+                {loading ? 'Verificando…' : 'Face ID / Touch ID'}
+              </button>
+              {pinError && <p style={{ margin: 0, fontSize: 12, color: '#EF4444', textAlign: 'center' }}>{pinError}</p>}
+              <button onClick={() => { setQuickMode('pin_fallback'); setPinError('') }}
+                style={{ background: 'none', border: 'none', color: '#475569', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'center', padding: '4px' }}>
+                Usar PIN en su lugar
+              </button>
+              <button onClick={() => { setQuickMode('password_fallback'); setPinError('') }}
+                style={{ background: 'none', border: 'none', color: '#334155', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'center' }}>
+                Usar contraseña maestra
+              </button>
             </div>
+          )}
 
-            <PwField label="Contraseña maestra" value={masterPw} onChange={setMasterPw}
-              show={showMPw} onToggle={() => setShowMPw(p => !p)} autoFocus
-              onKeyDown={e => e.key === 'Enter' && handleUnlock()} />
+          {/* ── MODO PIN */}
+          {(quickMode === 'pin' || quickMode === 'pin_fallback') && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14, alignItems: 'center' }}>
+              <p style={{ margin: 0, fontSize: 13, color: '#94A3B8' }}>Introduce tu PIN de 6 dígitos</p>
+              {isPinLocked && <p style={{ margin: 0, fontSize: 12, color: '#F59E0B' }}>PIN bloqueado. Espera {pinLockSecs}s</p>}
+              <PINPad
+                value={pinInput}
+                onChange={setPinInput}
+                onSubmit={pin => handlePINUnlock(pin)}
+                disabled={loading || isPinLocked}
+                error={pinError}
+              />
+              <button onClick={() => { setQuickMode('password_fallback'); setPinInput(''); setPinError('') }}
+                style={{ background: 'none', border: 'none', color: '#334155', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>
+                Usar contraseña maestra
+              </button>
+            </div>
+          )}
 
-            {!loadLocal() && masterPw && str?.label && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <div style={{ flex: 1, height: 3, background: '#1E293B', borderRadius: 99, overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${(str.score / 5) * 100}%`, background: str.color, borderRadius: 99, transition: 'all 0.3s' }} />
+          {/* ── MODO CONTRASEÑA MAESTRA (default o fallback) */}
+          {(quickMode === 'none' || quickMode === 'password_fallback') && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {!hasLocal && (
+                <div style={{ background: 'rgba(96,165,250,0.05)', border: '1px solid rgba(96,165,250,0.1)', borderRadius: 10, padding: '10px 14px', fontSize: 11, color: '#64748B', lineHeight: 1.7 }}>
+                  🔐 AES-256-GCM · PBKDF2 · {PBKDF2_ITERATIONS.toLocaleString()} iteraciones<br />
+                  Contraseña maestra <strong style={{ color: '#94A3B8' }}>nunca sale del dispositivo</strong>
                 </div>
-                <span style={{ fontSize: 11, color: str.color, whiteSpace: 'nowrap' }}>{str.label}</span>
-              </div>
-            )}
+              )}
+              <PwField label="Contraseña maestra" value={masterPw} onChange={setMasterPw}
+                show={showMPw} onToggle={() => setShowMPw(p => !p)} autoFocus
+                onKeyDown={e => e.key === 'Enter' && handleUnlock()} />
+              {!hasLocal && masterPw && str?.label && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ flex: 1, height: 3, background: '#1E293B', borderRadius: 99, overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${(str.score / 5) * 100}%`, background: str.color, borderRadius: 99 }} />
+                  </div>
+                  <span style={{ fontSize: 11, color: str.color }}>{str.label}</span>
+                </div>
+              )}
+              <button onClick={handleUnlock} disabled={loading || !masterPw}
+                style={{ width: '100%', padding: '13px', background: loading || !masterPw ? 'rgba(96,165,250,0.08)' : 'linear-gradient(135deg,#1D4ED8,#1E40AF)', border: '1px solid rgba(96,165,250,0.3)', borderRadius: 10, color: '#E2E8F0', fontSize: 13, fontWeight: 600, cursor: loading || !masterPw ? 'not-allowed' : 'pointer', letterSpacing: '1px', textTransform: 'uppercase', fontFamily: 'inherit' }}>
+                {loading ? '⏳ Descifrando…' : !hasLocal ? 'Crear Bóveda' : 'Desbloquear'}
+              </button>
+            </div>
+          )}
 
-            <button onClick={handleUnlock} disabled={loading || !masterPw}
-              style={{ width: '100%', padding: '13px', background: loading || !masterPw ? 'rgba(96,165,250,0.08)' : 'linear-gradient(135deg,#1D4ED8,#1E40AF)', border: '1px solid rgba(96,165,250,0.3)', borderRadius: 10, color: '#E2E8F0', fontSize: 13, fontWeight: 600, cursor: loading || !masterPw ? 'not-allowed' : 'pointer', letterSpacing: '1px', textTransform: 'uppercase', fontFamily: 'inherit' }}>
-              {loading ? '⏳ Descifrando…' : !loadLocal() ? 'Crear Bóveda' : 'Desbloquear'}
-            </button>
-
+          <div style={{ marginTop: 16, borderTop: '1px solid rgba(96,165,250,0.08)', paddingTop: 14 }}>
             <button onClick={handleLogout}
-              style={{ background: 'none', border: 'none', color: '#475569', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'center' }}>
+              style={{ background: 'none', border: 'none', color: '#334155', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit', width: '100%', textAlign: 'center' }}>
               Cerrar sesión
             </button>
           </div>
@@ -595,6 +760,97 @@ export default function VaultApp() {
           {authUser?.email?.split('@')[0]}
         </span>
       </header>
+
+      {/* ── MODAL: OFRECER DESBLOQUEO RÁPIDO tras primer login */}
+      {setupMode === 'offer' && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9000, padding: 20 }}>
+          <div style={{ background: '#0F172A', border: '1px solid rgba(96,165,250,0.2)', borderRadius: 18, padding: '28px 24px', maxWidth: 380, width: '100%', boxSizing: 'border-box' }}>
+            <div style={{ textAlign: 'center', marginBottom: 20 }}>
+              <div style={{ fontSize: 40, marginBottom: 10 }}>🔐</div>
+              <h3 style={{ margin: '0 0 8px', color: '#F1F5F9', fontSize: 16 }}>Desbloqueo rápido</h3>
+              <p style={{ margin: 0, fontSize: 12, color: '#475569', lineHeight: 1.6 }}>
+                Activa Face ID / Touch ID o un PIN de 6 dígitos para abrir la bóveda sin escribir la contraseña maestra cada vez.
+              </p>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {bioSupported && (
+                <button onClick={() => { setSetupMode('biometric'); setSetupStep(1) }}
+                  style={{ width: '100%', padding: '13px', background: 'linear-gradient(135deg,#1D4ED8,#1E40AF)', border: '1px solid rgba(96,165,250,0.3)', borderRadius: 10, color: '#E2E8F0', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                  <Icon d={IC.faceId} size={18} stroke="#E2E8F0" />
+                  Activar Face ID / Touch ID
+                </button>
+              )}
+              <button onClick={() => { setSetupMode('pin'); setSetupStep(1); setSetupPin(''); setSetupPin2('') }}
+                style={{ width: '100%', padding: '13px', background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.2)', borderRadius: 10, color: '#93C5FD', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                <Icon d={IC.pin} size={18} stroke="#93C5FD" />
+                Activar PIN de 6 dígitos
+              </button>
+              <button onClick={() => setSetupMode(null)}
+                style={{ background: 'none', border: 'none', color: '#334155', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', padding: '8px', textAlign: 'center' }}>
+                Ahora no
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL: SETUP BIOMETRÍA */}
+      {setupMode === 'biometric' && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9000, padding: 20 }}>
+          <div style={{ background: '#0F172A', border: '1px solid rgba(96,165,250,0.2)', borderRadius: 18, padding: '28px 24px', maxWidth: 380, width: '100%', boxSizing: 'border-box' }}>
+            <div style={{ textAlign: 'center', marginBottom: 20 }}>
+              <div style={{ fontSize: 40, marginBottom: 10 }}>🔏</div>
+              <h3 style={{ margin: '0 0 8px', color: '#F1F5F9', fontSize: 16 }}>Activar Face ID / Touch ID</h3>
+              <p style={{ margin: 0, fontSize: 12, color: '#475569', lineHeight: 1.6 }}>
+                Al pulsar el botón, el sistema te pedirá autenticarte con Face ID o Touch ID para registrar tu biometría.
+              </p>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <button onClick={handleSetupBiometric} disabled={loading}
+                style={{ width: '100%', padding: '13px', background: loading ? 'rgba(96,165,250,0.05)' : 'linear-gradient(135deg,#1D4ED8,#1E40AF)', border: '1px solid rgba(96,165,250,0.3)', borderRadius: 10, color: '#E2E8F0', fontSize: 13, fontWeight: 600, cursor: loading ? 'not-allowed' : 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                <Icon d={IC.faceId} size={18} stroke="#E2E8F0" />
+                {loading ? 'Registrando…' : 'Registrar biometría'}
+              </button>
+              <button onClick={() => setSetupMode('offer')}
+                style={{ background: 'none', border: 'none', color: '#334155', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', padding: '8px', textAlign: 'center' }}>
+                Volver
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL: SETUP PIN */}
+      {setupMode === 'pin' && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9000, padding: 20 }}>
+          <div style={{ background: '#0F172A', border: '1px solid rgba(96,165,250,0.2)', borderRadius: 18, padding: '28px 24px', maxWidth: 380, width: '100%', boxSizing: 'border-box' }}>
+            <div style={{ textAlign: 'center', marginBottom: 20 }}>
+              <div style={{ fontSize: 40, marginBottom: 10 }}>🔢</div>
+              <h3 style={{ margin: '0 0 8px', color: '#F1F5F9', fontSize: 16 }}>
+                {setupStep === 1 ? 'Elige un PIN de 6 dígitos' : 'Confirma el PIN'}
+              </h3>
+              <p style={{ margin: 0, fontSize: 12, color: '#475569' }}>
+                {setupStep === 1 ? 'Escoge 6 dígitos que recuerdes bien.' : 'Introduce el mismo PIN otra vez.'}
+              </p>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14, alignItems: 'center' }}>
+              <PINPad
+                value={setupStep === 1 ? setupPin : setupPin2}
+                onChange={setupStep === 1 ? setSetupPin : setSetupPin2}
+                onSubmit={pin => {
+                  if (setupStep === 1) { setSetupStep(2); setSetupPin(pin) }
+                  else { setSetupPin2(pin); handleSetupPIN() }
+                }}
+                disabled={loading}
+              />
+              <button onClick={() => { if (setupStep === 2) { setSetupStep(1); setSetupPin2('') } else setSetupMode('offer') }}
+                style={{ background: 'none', border: 'none', color: '#334155', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+                {setupStep === 2 ? 'Volver' : 'Cancelar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── CHANGE MASTER PASSWORD MODAL */}
       {changePwStep > 0 && (
@@ -752,6 +1008,41 @@ export default function VaultApp() {
             <InfoRow label="Cifrado" value="AES-256-GCM" />
             <InfoRow label="Derivación de clave" value={`PBKDF2 · ${PBKDF2_ITERATIONS.toLocaleString()} iter.`} />
             <InfoRow label="Estado sync" value={{ idle: 'Sin cambios', syncing: 'Sincronizando…', synced: 'Sincronizado ✅', error: 'Error ❌', offline: 'Sin conexión 📴' }[syncStatus]} />
+          </Section>
+
+          {/* Quick unlock */}
+          <Section title="Desbloqueo rápido">
+            {quickMode === 'none' && (
+              <div style={{ padding: '14px 16px' }}>
+                <p style={{ margin: '0 0 12px', fontSize: 12, color: '#475569' }}>Sin desbloqueo rápido activado.</p>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {bioSupported && (
+                    <button onClick={() => { setSetupMode('biometric'); setPanel('vault') }}
+                      style={{ flex: 1, padding: '10px', background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.2)', borderRadius: 9, color: '#93C5FD', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
+                      <Icon d={IC.faceId} size={14} stroke="#93C5FD" /> Face ID
+                    </button>
+                  )}
+                  <button onClick={() => { setSetupMode('pin'); setSetupStep(1); setSetupPin(''); setSetupPin2(''); setPanel('vault') }}
+                    style={{ flex: 1, padding: '10px', background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.2)', borderRadius: 9, color: '#93C5FD', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
+                    <Icon d={IC.pin} size={14} stroke="#93C5FD" /> PIN 6 dígitos
+                  </button>
+                </div>
+              </div>
+            )}
+            {quickMode !== 'none' && (
+              <div style={{ padding: '14px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div style={{ fontSize: 13, color: '#E2E8F0' }}>
+                    {quickMode === 'biometric' ? '✅ Face ID / Touch ID activo' : '✅ PIN de 6 dígitos activo'}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>Desbloqueo rápido habilitado</div>
+                </div>
+                <button onClick={handleDisableQuickUnlock}
+                  style={{ padding: '7px 12px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 8, color: '#EF4444', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>
+                  Desactivar
+                </button>
+              </div>
+            )}
           </Section>
 
           {/* Danger zone */}
@@ -1151,6 +1442,63 @@ function SettingsBtn({ icon, label, sub, onClick }) {
       </div>
       <Icon d={IC.chevronL} size={14} stroke="#334155" style={{ marginLeft: 'auto', transform: 'rotate(180deg)' }} />
     </button>
+  )
+}
+
+// ─── PIN PAD ───────────────────────────────────────────────────────────────
+function PINPad({ value, onChange, onSubmit, disabled, error }) {
+  const dots = Array(6).fill(0).map((_, i) => i < value.length)
+
+  const press = (digit) => {
+    if (disabled) return
+    const next = value + digit
+    if (next.length <= 6) {
+      onChange(next)
+      if (next.length === 6) onSubmit(next)
+    }
+  }
+
+  const del = () => {
+    if (disabled) return
+    onChange(value.slice(0, -1))
+  }
+
+  return (
+    <div style={{ width: '100%', maxWidth: 280, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20 }}>
+      {/* Dots */}
+      <div style={{ display: 'flex', gap: 12 }}>
+        {dots.map((filled, i) => (
+          <div key={i} style={{ width: 14, height: 14, borderRadius: '50%', background: filled ? '#60A5FA' : 'rgba(96,165,250,0.15)', border: '1px solid rgba(96,165,250,0.3)', transition: 'all 0.15s' }} />
+        ))}
+      </div>
+
+      {/* Error */}
+      {error && <p style={{ margin: 0, fontSize: 12, color: '#EF4444', textAlign: 'center' }}>{error}</p>}
+
+      {/* Keypad */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, width: '100%' }}>
+        {[1,2,3,4,5,6,7,8,9,'',0,'⌫'].map((k, i) => (
+          <button key={i}
+            onClick={() => k === '⌫' ? del() : k !== '' && press(String(k))}
+            disabled={disabled || k === ''}
+            style={{
+              padding: '16px 0',
+              background: k === '⌫' ? 'rgba(239,68,68,0.08)' : k === '' ? 'transparent' : 'rgba(96,165,250,0.06)',
+              border: k === '' ? 'none' : `1px solid ${k === '⌫' ? 'rgba(239,68,68,0.2)' : 'rgba(96,165,250,0.15)'}`,
+              borderRadius: 12,
+              color: k === '⌫' ? '#EF4444' : '#E2E8F0',
+              fontSize: k === '⌫' ? 20 : 22,
+              fontWeight: 600,
+              cursor: k === '' || disabled ? 'default' : 'pointer',
+              fontFamily: 'inherit',
+              touchAction: 'manipulation',
+              opacity: disabled ? 0.5 : 1,
+            }}>
+            {k}
+          </button>
+        ))}
+      </div>
+    </div>
   )
 }
 
