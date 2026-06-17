@@ -142,6 +142,12 @@ export default function VaultApp() {
   const [loading, setLoading]       = useState(false)
   const [backupLog, setBackupLog]   = useState([])
 
+  // ── CSV import state
+  const [csvImportStep, setCsvImportStep]     = useState(0)  // 0=off 2=preview
+  const [csvParsedEntries, setCsvParsedEntries] = useState([])
+  const [csvHeaders, setCsvHeaders]           = useState([])
+  const [csvFieldMap, setCsvFieldMap]         = useState([])
+
   // ── Change master password state
   const [changePwStep, setChangePwStep] = useState(0) // 0=off 1=form 2=confirming
   const [oldMPw, setOldMPw]         = useState('')
@@ -475,6 +481,111 @@ export default function VaultApp() {
     a.click()
     URL.revokeObjectURL(a.href)
     notify('📊 CSV con ' + entries.length + ' entradas exportado')
+  }
+
+  // ── IMPORT CSV: parseo + detección de columnas ────────────────────────
+  const parseCSV = (text) => {
+    // Parser CSV simple que respeta comillas y comas dentro de campos
+    const rows = []
+    let row = [], field = '', inQuotes = false
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i]
+      if (inQuotes) {
+        if (c === '"') {
+          if (text[i + 1] === '"') { field += '"'; i++ }
+          else inQuotes = false
+        } else field += c
+      } else {
+        if (c === '"') inQuotes = true
+        else if (c === ',') { row.push(field); field = '' }
+        else if (c === '\n' || c === '\r') {
+          if (field !== '' || row.length) { row.push(field); rows.push(row); row = []; field = '' }
+          if (c === '\r' && text[i + 1] === '\n') i++
+        } else field += c
+      }
+    }
+    if (field !== '' || row.length) { row.push(field); rows.push(row) }
+    return rows.filter(r => r.length > 1 || (r.length === 1 && r[0].trim() !== ''))
+  }
+
+  // Alias de cabeceras comunes (Chrome, Bitwarden, LastPass, 1Password, nuestro propio CSV)
+  const HEADER_ALIASES = {
+    title:    ['titulo', 'título', 'title', 'name', 'nombre'],
+    url:      ['url', 'login_uri', 'website', 'sitio web', 'web site'],
+    username: ['usuario', 'username', 'login_username', 'user', 'email'],
+    password: ['contrasena', 'contraseña', 'password', 'login_password'],
+    notes:    ['notas', 'notes', 'extra'],
+    cardNumber: ['num tarjeta', 'número de tarjeta', 'card number', 'cardnumber'],
+    holder:     ['titular', 'cardholder', 'name on card'],
+    expiry:     ['vencimiento', 'expiry', 'exp_month', 'expiration'],
+    cvv:        ['cvv', 'cvc', 'security code'],
+    ssid:       ['ssid', 'nombre de red', 'network name'],
+    fullName:   ['nombre completo', 'full name', 'fullname'],
+  }
+
+  const detectField = (header) => {
+    const h = header.trim().toLowerCase()
+    for (const [field, aliases] of Object.entries(HEADER_ALIASES)) {
+      if (aliases.includes(h)) return field
+    }
+    return null
+  }
+
+  const handleImportCSVFile = (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      try {
+        const rows = parseCSV(ev.target.result)
+        if (rows.length < 2) { notify('El CSV está vacío o no tiene datos', 'error'); return }
+
+        const headers = rows[0]
+        const dataRows = rows.slice(1)
+
+        const fieldMap = headers.map(h => detectField(h))
+
+        const parsed = dataRows
+          .filter(r => r.some(v => v && v.trim() !== ''))
+          .map(r => {
+            const entry = { category: 'password' }
+            r.forEach((val, i) => {
+              const field = fieldMap[i]
+              if (field && val) entry[field] = val.trim()
+            })
+            if (!entry.title) entry.title = entry.url || entry.username || 'Sin título'
+            return entry
+          })
+
+        setCsvHeaders(headers)
+        setCsvFieldMap(fieldMap)
+        setCsvParsedEntries(parsed)
+        setCsvImportStep(2)
+      } catch (err) {
+        notify('Error al leer el archivo CSV', 'error')
+      }
+    }
+    reader.readAsText(file)
+    e.target.value = ''
+  }
+
+  const handleConfirmCSVImport = async () => {
+    if (!csvParsedEntries.length) return
+    setLoading(true)
+    const newEntries = csvParsedEntries.map(p => ({
+      ...p,
+      id: Date.now().toString() + Math.random().toString(36).slice(2, 8),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }))
+    const updated = [...entries, ...newEntries]
+    setEntries(updated)
+    await persist(updated)
+    notify(`✅ ${newEntries.length} entradas importadas desde CSV`)
+    setCsvImportStep(0)
+    setCsvParsedEntries([])
+    setCsvHeaders([])
+    setLoading(false)
   }
 
   // ── IMPORT BACKUP
@@ -890,6 +1001,77 @@ export default function VaultApp() {
         </div>
       )}
 
+      {/* ── MODAL: PREVISUALIZAR IMPORTACIÓN CSV */}
+      {csvImportStep === 2 && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9000, padding: 16 }}>
+          <div style={{ background: '#0F172A', border: '1px solid rgba(96,165,250,0.2)', borderRadius: 18, padding: '24px 20px', maxWidth: 540, width: '100%', maxHeight: '85vh', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, flexShrink: 0 }}>
+              <div style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <Icon d={IC.table} size={16} stroke="#60A5FA" />
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: '#E2E8F0' }}>Previsualizar importación</div>
+                <div style={{ fontSize: 11, color: '#475569' }}>{csvParsedEntries.length} entradas detectadas</div>
+              </div>
+              <button onClick={() => { setCsvImportStep(0); setCsvParsedEntries([]); setCsvHeaders([]) }} style={IBTN}>
+                <Icon d={IC.x} size={16} stroke="#64748B" />
+              </button>
+            </div>
+
+            {/* Columnas detectadas */}
+            <div style={{ background: 'rgba(96,165,250,0.05)', border: '1px solid rgba(96,165,250,0.1)', borderRadius: 10, padding: '10px 14px', marginBottom: 14, flexShrink: 0 }}>
+              <div style={{ fontSize: 10, color: '#475569', marginBottom: 6, letterSpacing: '1px', textTransform: 'uppercase' }}>Columnas detectadas</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {csvHeaders.map((h, i) => (
+                  <span key={i} style={{
+                    fontSize: 10, padding: '3px 8px', borderRadius: 6,
+                    background: csvFieldMap[i] ? 'rgba(16,185,129,0.1)' : 'rgba(100,116,139,0.1)',
+                    border: `1px solid ${csvFieldMap[i] ? 'rgba(16,185,129,0.25)' : 'rgba(100,116,139,0.2)'}`,
+                    color: csvFieldMap[i] ? '#6EE7B7' : '#64748B',
+                  }}>
+                    {h} {csvFieldMap[i] ? '✓' : '(omitida)'}
+                  </span>
+                ))}
+              </div>
+              <p style={{ margin: '8px 0 0', fontSize: 10, color: '#475569', lineHeight: 1.5 }}>
+                Todas las entradas se importarán como categoría <strong style={{ color: '#60A5FA' }}>Contraseña</strong>. Podrás cambiar la categoría editando cada una después.
+              </p>
+            </div>
+
+            {/* Lista previsualización */}
+            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16, minHeight: 100 }}>
+              {csvParsedEntries.slice(0, 50).map((e, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 9, background: 'rgba(15,23,42,0.6)', border: '1px solid rgba(96,165,250,0.07)' }}>
+                  <div style={{ width: 28, height: 28, borderRadius: 7, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <Icon d={IC.key} size={13} stroke="#60A5FA" />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: '#E2E8F0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.title}</div>
+                    <div style={{ fontSize: 10, color: '#475569', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.username || e.url || '—'}</div>
+                  </div>
+                </div>
+              ))}
+              {csvParsedEntries.length > 50 && (
+                <p style={{ textAlign: 'center', fontSize: 11, color: '#475569', margin: '6px 0' }}>
+                  y {csvParsedEntries.length - 50} entradas más…
+                </p>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+              <button onClick={() => { setCsvImportStep(0); setCsvParsedEntries([]); setCsvHeaders([]) }} style={SBTN}>
+                Cancelar
+              </button>
+              <button onClick={handleConfirmCSVImport} disabled={loading}
+                style={{ ...SBTN, flex: 1, background: 'linear-gradient(135deg,#1D4ED8,#1E40AF)', borderColor: 'rgba(96,165,250,0.3)', color: '#E2E8F0' }}>
+                {loading ? '⏳ Importando…' : `Importar ${csvParsedEntries.length} entradas`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── CHANGE MASTER PASSWORD MODAL */}
       {changePwStep > 0 && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9000, padding: 20 }}>
@@ -1015,11 +1197,20 @@ export default function VaultApp() {
                     Exporta todas las entradas en texto plano. Útil para migrar a otro gestor o abrir en Excel.
                     <strong style={{ color: '#F59E0B' }}> Guárdalo en un lugar seguro o elimínalo tras usarlo.</strong>
                   </p>
-                  <button onClick={handleExportCSV}
-                    style={{ padding: '9px 16px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 8, color: '#FBBF24', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                    <Icon d={IC.table} size={13} stroke="#FBBF24" />
-                    Descargar .csv
-                  </button>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button onClick={handleExportCSV}
+                      style={{ padding: '9px 16px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 8, color: '#FBBF24', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <Icon d={IC.table} size={13} stroke="#FBBF24" />
+                      Descargar .csv
+                    </button>
+                    <button onClick={() => document.getElementById('csvImportFile').click()}
+                      style={{ padding: '9px 16px', background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.2)', borderRadius: 8, color: '#60A5FA', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <Icon d={IC.upload} size={13} stroke="#60A5FA" />
+                      Importar .csv
+                    </button>
+                  </div>
+                  <input id="csvImportFile" type="file" accept=".csv,text/csv,application/vnd.ms-excel,*/*"
+                    onChange={handleImportCSVFile} style={{ display: 'none' }} />
                 </div>
               </div>
             </div>
