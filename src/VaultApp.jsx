@@ -50,6 +50,7 @@ const IC = {
   settings: ['M12 15a3 3 0 100-6 3 3 0 000 6z', 'M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z'],
   logout:   ['M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4', 'M16 17l5-5-5-5', 'M21 12H9'],
   table:    ['M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18'],
+  bankIcon: ['M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z', 'M9 22V12h6v10'],
   faceId:   ['M8 2H6a2 2 0 00-2 2v2', 'M16 2h2a2 2 0 012 2v2', 'M8 22H6a2 2 0 01-2-2v-2', 'M16 22h2a2 2 0 002-2v-2', 'M9 10h.01', 'M15 10h.01', 'M9.5 15a3.5 3.5 0 005 0'],
   pin:      ['M12 2a10 10 0 100 20A10 10 0 0012 2z', 'M12 8v4', 'M12 16h.01'],
 }
@@ -58,7 +59,8 @@ const IC = {
 const CATEGORIES = [
   { id: 'password', label: 'Contraseña',  icon: 'key',   color: '#60A5FA' },
   { id: 'card',     label: 'Tarjeta',     icon: 'card',  color: '#F472B6' },
-  { id: 'wifi',     label: 'WiFi',        icon: 'wifi',  color: '#34D399' },
+  { id: 'bank',     label: 'Banco',       icon: 'bankIcon', color: '#34D399' },
+  { id: 'wifi',     label: 'WiFi',        icon: 'wifi',     color: '#38BDF8' },
   { id: 'note',     label: 'Nota',        icon: 'note',  color: '#FBBF24' },
   { id: 'identity', label: 'Identidad',   icon: 'user',  color: '#A78BFA' },
 ]
@@ -77,6 +79,17 @@ const FIELDS = {
     { key: 'pin',        label: 'PIN',                 type: 'password', placeholder: '••••'                },
     { key: 'bank',       label: 'Banco / Entidad',     type: 'text',     placeholder: 'Nombre del banco'    },
     { key: 'notes',      label: 'Notas',               type: 'textarea', placeholder: 'Notas adicionales…'  },
+  ],
+  bank: [
+    { key: 'bankName',    label: 'Nombre del banco',        type: 'text',     placeholder: 'Nombre de la entidad'    },
+    { key: 'iban',        label: 'IBAN / Número de cuenta', type: 'text',     placeholder: 'ES00 0000 0000 00 0000000000' },
+    { key: 'swift',       label: 'BIC / SWIFT',             type: 'text',     placeholder: 'XXXXXXXX'                },
+    { key: 'username',    label: 'Usuario banca online',    type: 'text',     placeholder: 'usuario o NIF'           },
+    { key: 'password',    label: 'Contraseña online',       type: 'password', placeholder: '••••••••'                },
+    { key: 'pin',         label: 'PIN / Firma digital',     type: 'password', placeholder: '••••'                    },
+    { key: 'phone',       label: 'Teléfono atención',       type: 'text',     placeholder: '+34 900 000 000'         },
+    { key: 'holder',      label: 'Titular de la cuenta',    type: 'text',     placeholder: 'Nombre Apellido'         },
+    { key: 'notes',       label: 'Notas',                   type: 'textarea', placeholder: 'Oficina, gestor, etc.'   },
   ],
   wifi: [
     { key: 'ssid',     label: 'Nombre de red (SSID)',  type: 'text',     placeholder: 'MiRedWiFi'           },
@@ -484,8 +497,24 @@ export default function VaultApp() {
   }
 
   // ── IMPORT CSV: parseo + detección de columnas ────────────────────────
+
+  // Detecta el delimitador real del archivo mirando la primera línea:
+  // cuenta tabuladores, comas y punto y coma fuera de comillas, y elige
+  // el que aparece más veces (Excel/Numbers exportan a menudo con tab o ;)
+  const detectDelimiter = (text) => {
+    const firstLine = text.split(/\r?\n/, 1)[0] || ''
+    const counts = {
+      '\t': (firstLine.match(/\t/g) || []).length,
+      ',':  (firstLine.match(/,/g)  || []).length,
+      ';':  (firstLine.match(/;/g)  || []).length,
+    }
+    const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]
+    return best[1] > 0 ? best[0] : ','  // si no hay ninguno, asume coma
+  }
+
   const parseCSV = (text) => {
-    // Parser CSV simple que respeta comillas y comas dentro de campos
+    const delim = detectDelimiter(text)
+    // Parser CSV simple que respeta comillas y el delimitador detectado
     const rows = []
     let row = [], field = '', inQuotes = false
     for (let i = 0; i < text.length; i++) {
@@ -497,7 +526,7 @@ export default function VaultApp() {
         } else field += c
       } else {
         if (c === '"') inQuotes = true
-        else if (c === ',') { row.push(field); field = '' }
+        else if (c === delim) { row.push(field); field = '' }
         else if (c === '\n' || c === '\r') {
           if (field !== '' || row.length) { row.push(field); rows.push(row); row = []; field = '' }
           if (c === '\r' && text[i + 1] === '\n') i++
@@ -515,6 +544,8 @@ export default function VaultApp() {
     username: ['usuario', 'username', 'login_username', 'user', 'email'],
     password: ['contrasena', 'contraseña', 'password', 'login_password'],
     notes:    ['notas', 'notes', 'extra'],
+    iban:     ['iban', 'cuenta', 'account', 'número de cuenta'],
+    bankName: ['banco', 'bank', 'entidad', 'institution'],
     cardNumber: ['num tarjeta', 'número de tarjeta', 'card number', 'cardnumber'],
     holder:     ['titular', 'cardholder', 'name on card'],
     expiry:     ['vencimiento', 'expiry', 'exp_month', 'expiration'],
@@ -661,13 +692,15 @@ export default function VaultApp() {
 
   const copy = val => { navigator.clipboard?.writeText(val); notify('📋 Copiado') }
 
-  const filtered = entries.filter(e => {
-    const mc = filterCat === 'all' || e.category === filterCat
-    const q  = search.toLowerCase()
-    const ms = !q || e.title?.toLowerCase().includes(q) ||
-      Object.values(e).some(v => typeof v === 'string' && v.toLowerCase().includes(q))
-    return mc && ms
-  })
+  const filtered = entries
+    .filter(e => {
+      const mc = filterCat === 'all' || e.category === filterCat
+      const q  = search.toLowerCase()
+      const ms = !q || e.title?.toLowerCase().includes(q) ||
+        Object.values(e).some(v => typeof v === 'string' && v.toLowerCase().includes(q))
+      return mc && ms
+    })
+    .sort((a, b) => (a.title || '').localeCompare(b.title || '', 'es', { sensitivity: 'base' }))
   const counts = {}
   entries.forEach(e => { counts[e.category] = (counts[e.category] || 0) + 1 })
 
